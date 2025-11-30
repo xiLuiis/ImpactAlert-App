@@ -116,3 +116,16 @@ body {
     font-weight: bold;
     padding: 22px;
 }
+
+.countdown {
+    margin-top: 20px;
+    font-size: 26px;
+    font-weight: bold;
+    color: #d93d33;
+    transition: opacity .3s ease;
+}
+
+.hidden {
+    opacity: 0;
+    pointer-events: none;
+}

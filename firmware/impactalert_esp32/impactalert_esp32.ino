@@ -28,20 +28,28 @@ void handleStatus() {
 }
 // ----------------------------------
 
-void handleEncender() {
-  Serial.println("Comando recibido: ENCENDER");
+void handleStatus() {
+  String json = "{";
+  json += "\"connected\": true, ";
+  json += "\"emergency\": " + String(emergencyActive ? "true" : "false") + ",";
+  json += "\"power\": " + String(powerOn ? "true" : "false");
+  json += "}";
+  
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(200, "application/json", json);
+}
 
+void handleEncender() {
+  powerOn = true;
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(200, "application/json", "{\"status\":\"OK\",\"action\":\"encender\"}");
 }
 
 void handleApagar() {
-  Serial.println("Comando recibido: APAGAR");
-
+  powerOn = false;
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(200, "application/json", "{\"status\":\"OK\",\"action\":\"apagar\"}");
 }
-
 
 void handleLeer() {
   float temp = 20 + random(0, 100) / 10.0;
