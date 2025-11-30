@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emergency System</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+
+    <!-- Estado del microcontrolador -->
+    <div class="status-text" id="mcu-status">
+        MCU Status: Checking...
+    </div>
+
+    <!-- Botón principal: SYSTEM NORMAL / CANCEL EMERGENCY -->
+    <button id="main-btn" class="emergency-btn" onclick="cancelEmergency()">
+        SYSTEM NORMAL
+    </button>
+
+    <!-- Opciones -->
+    <div class="options">
+
+        <button class="option-btn">
+            <span class="icon">👤</span>
+            Add Emergency Contacts
+        </button>
+
+        <button class="option-btn">
+            <span class="icon">🎚️</span>
+            Adjust Impact Threshold
+        </button>
+
+        <!-- Llamar al 911 -->
+        <button class="option-btn call-btn" onclick="call911()">
+            📞 CALL 911
+        </button>
+
+    </div>
+
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
