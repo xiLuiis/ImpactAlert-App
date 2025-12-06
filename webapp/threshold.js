@@ -1,51 +1,79 @@
-// ------------------------------
-//  THRESHOLD STORAGE (PERSISTENTE)
-// ------------------------------
-let threshold = Number(localStorage.getItem("impactThreshold") || 30);
+let debugEnabled = false;
+let sensorInterval = null;
 
+/* ===============================
+   LOAD CURRENT THRESHOLD
+=============================== */
 document.addEventListener("DOMContentLoaded", () => {
+    const saved = localStorage.getItem("impactThreshold") || 30;
 
-    // Mostrar el threshold actual
-    document.getElementById("current-threshold").textContent = threshold;
+    document.getElementById("current-threshold").textContent = saved;
+    document.getElementById("threshold-input").value = saved;
 
-    // Cargar el valor en el input
-    document.getElementById("threshold-input").value = threshold;
-
-    // Guardar threshold
-    document.getElementById("save-btn").onclick = () => {
-        threshold = Number(document.getElementById("threshold-input").value);
-
-        // Guardar en memoria del navegador
-        localStorage.setItem("impactThreshold", threshold);
-
-        // Refrescar el texto
-        document.getElementById("current-threshold").textContent = threshold;
-
-        alert("Threshold saved: " + threshold);
-    };
-
-    // Botón Back
-    document.getElementById("back-btn").onclick = () => {
-        window.location.href = "index.html";
-    };
+    document.getElementById("sensor-box").textContent = "DEBUG OFF";
 });
 
+/* ===============================
+   SAVE THRESHOLD
+=============================== */
+function saveThreshold() {
+    const val = document.getElementById("threshold-input").value.trim();
 
-// ------------------------------
-//  SENSOR DEBUG
-// ------------------------------
-function readSensor() {
-    fetch("http://192.168.100.29/leer", { cache: "no-store" })
-        .then(res => res.json())
-        .then(data => {
-            document.getElementById("sensor-value").textContent =
-                "Sensor: " + data.temp;
-        })
-        .catch(() => {
-            document.getElementById("sensor-value").textContent =
-                "Sensor: offline";
-        });
+    if (!val) {
+        alert("Please enter a valid value.");
+        return;
+    }
+
+    localStorage.setItem("impactThreshold", val);
+
+    document.getElementById("current-threshold").textContent = val;
+
+    alert("Threshold saved!");
 }
 
-setInterval(readSensor, 800);
-readSensor();
+/* ===============================
+   DEBUG MODE TOGGLE
+=============================== */
+function toggleDebug() {
+    debugEnabled = document.getElementById("debug-toggle").checked;
+
+    if (debugEnabled) {
+        startSensorUpdates();
+    } else {
+        stopSensorUpdates();
+        document.getElementById("sensor-box").textContent = "DEBUG OFF";
+    }
+}
+
+/* ===============================
+   SENSOR POLLING
+=============================== */
+function startSensorUpdates() {
+    stopSensorUpdates(); // evitar duplicados
+
+    sensorInterval = setInterval(() => {
+        fetch("http://192.168.100.29/leer")
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById("sensor-box").textContent =
+                    data.temp.toFixed(2);
+            })
+            .catch(() => {
+                document.getElementById("sensor-box").textContent = "--";
+            });
+    }, 700);
+}
+
+function stopSensorUpdates() {
+    if (sensorInterval) {
+        clearInterval(sensorInterval);
+        sensorInterval = null;
+    }
+}
+
+/* ===============================
+   BACK BUTTON
+=============================== */
+function goBack() {
+    window.location.href = "index.html";
+}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Impact Threshold Settings</title>
+<title>Impact Threshold</title>
 <link rel="stylesheet" href="style.css">
 </head>
 
@@ -11,34 +11,50 @@
 
 <div class="container">
 
-    <h2>Impact Threshold</h2>
-
-    <!-- CURRENT THRESHOLD -->
-    <p style="font-size: 20px; margin-top: 20px;">
-        Current Threshold: <span id="current-threshold">--</span>
-    </p>
-
-    <!-- MODIFY -->
-    <div style="margin-top: 15px;">
-        <label style="font-size: 16px;">Modify Threshold:</label><br>
-        <input id="threshold-input" type="number" min="5" max="100" value="30" style="margin-top:10px;">
-        <button id="save-btn">Save Threshold</button>
+    <!-- Status -->
+    <div id="mcu-status" class="status-text">
+        MCU Status: Checking...
     </div>
 
-    <!-- SENSOR -->
-    <div style="margin-top: 30px; font-size: 18px;" id="sensor-value">
-        Sensor: --
+    <!-- Countdown -->
+    <div id="countdown-box" class="countdown hidden">
+        <div id="countdown-text">Calling in 8...</div>
     </div>
 
-    <!-- BACK (centered) -->
-    <div style="display:flex; justify-content:center; margin-top:40px;">
-        <button id="back-btn" class="option-btn">
-            ← Back
-        </button>
+    <!-- DEBUG switch aligned right -->
+    <div style="width:100%; display:flex; justify-content:flex-end; margin-top:-15px;">
+        <label class="debug-switch">
+            <input type="checkbox" id="debug-toggle" onchange="toggleDebug()">
+            DEBUG
+        </label>
     </div>
+
+    <h2 style="margin-top:10px;">Impact Threshold</h2>
+
+    <p style="font-size:18px; margin-bottom:5px;">Current Threshold:</p>
+    <div id="current-threshold" class="value-box-small">--</div>
+
+    <input id="threshold-input"
+           type="number"
+           min="5" max="40"
+           class="input-field"
+           placeholder="Set new threshold">
+
+    <button class="primary-btn" onclick="saveThreshold()" style="margin-top:15px;">
+        Save Threshold
+    </button>
+
+    <h3 style="margin-top:30px;">Sensor Value</h3>
+    <div id="sensor-box" class="sensor-box-small">DEBUG OFF</div>
+
+    <!-- Back Button -->
+    <button class="back-btn" onclick="goBack()">
+        ← Back
+    </button>
 
 </div>
 
+<script src="script.js"></script>
 <script src="threshold.js"></script>
 </body>
 </html>

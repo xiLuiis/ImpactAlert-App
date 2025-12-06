@@ -11,29 +11,43 @@
 
 <div class="container">
 
-    <h2>Emergency Contacts</h2>
+    <!-- Estado del ESP32 -->
+    <div id="mcu-status" class="status-text">
+        MCU Status: Checking...
+    </div>
+
+    <!-- CONTADOR (compatible con script.js actual) -->
+    <div id="countdown-box" class="countdown hidden">
+        <div id="countdown-text">Calling in 8...</div>
+    </div>
+
+    <h2 style="margin-top: 20px;">Emergency Contacts</h2>
 
     <!-- FORM -->
     <div style="margin-top: 20px;">
-        <input id="name-input" type="text" placeholder="Name" style="padding:10px; width:70%; max-width:300px;">
-        <br><br>
-        <input id="phone-input" type="text" placeholder="Phone Number" style="padding:10px; width:70%; max-width:300px;">
-        <br><br>
-        <button onclick="addContact()">Save Contact</button>
+        <input id="name-input" type="text" placeholder="Name"
+               class="input-field">
+
+        <input id="phone-input" type="text" placeholder="Phone Number"
+               class="input-field" style="margin-top:10px;">
+
+        <button class="primary-btn" onclick="addContact()" style="margin-top:15px;">
+            Save Contact
+        </button>
     </div>
 
     <!-- CONTACT LIST -->
     <h3 style="margin-top:40px;">Saved Contacts</h3>
-    <div id="contact-list" style="margin-top:20px;"></div>
+    <div id="contact-list" style="margin-top:10px;"></div>
 
-    <!-- BACK -->
-    <div id="back-container" style="display:flex; justify-content:center; margin-top:40px;">
-        <button id="back-btn" class="option-btn" onclick="goBack()">← Back</button>        
-    </div>
-
+    <!-- BACK BUTTON -->
+    <button class="back-btn" onclick="goBack()">
+        ← Back
+    </button>
 
 </div>
 
+<script src="script.js"></script>
 <script src="contacts.js"></script>
 </body>
 </html>
