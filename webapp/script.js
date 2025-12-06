@@ -4,20 +4,6 @@ let lastEmergencyState = false;
 let countdownTimer = null;
 let countdownActive = false;
 let connectionFails = 0;
-// ------------------------------
-// TIMEOUT REAL (AbortController)
-// ------------------------------
-function fetchWithTimeout(url, timeout = 1900) {
-    const controller = new AbortController();
-    const signal = controller.signal;
-
-    const timer = setTimeout(() => {
-        controller.abort();
-    }, timeout);
-
-    return fetch(url, { signal })
-        .finally(() => clearTimeout(timer));
-}
 
 // ------------------------------
 // 1. ESTADO DEL SISTEMA
@@ -44,40 +30,34 @@ function updateSystemStatus(connected, emergency) {
 // 2. CONSULTAR AL ESP32 (con timeout)
 // ------------------------------
 function checkConnection() {
-    fetchWithTimeout("http://192.168.100.29/status", 1800)
-        .then(res => {
-            if (!res.ok) throw new Error("bad http");
-            return res.json();
-        })
-        .then(data => {
+    const url = "http://192.168.100.29/status?ts=" + Date.now();
 
-            connectionFails = 0;  // ← resetea fallos
+    fetch(url, { cache: "no-store" })
+        .then(res => res.json())
+        .then(data => {
+            connectionFails = 0;
 
             emergencyActive = data.emergency;
             updateSystemStatus(true, emergencyActive);
             document.getElementById("mcu-status").textContent = "MCU Connected";
 
-            // ---- CAMBIO DE ESTADO ----
             if (data.emergency !== lastEmergencyState) {
-                if (data.emergency) {
-                    startCountdown();
-                } else {
-                    stopCountdown();
-                }
+                if (data.emergency) startCountdown();
+                else stopCountdown();
             }
 
             lastEmergencyState = data.emergency;
         })
         .catch(() => {
-
             connectionFails++;
-
             if (connectionFails >= 2) {
                 updateSystemStatus(false, false);
                 document.getElementById("mcu-status").textContent = "MCU Offline";
             }
         });
 }
+
+
 
 // ------------------------------
 // 3. 911 CALL
@@ -122,8 +102,8 @@ function stopCountdown() {
     countdownActive = false;
 }
 
-// Consulta cada 1 segundos
-setInterval(checkConnection, 1000);
+setInterval(checkConnection, 200);
+
 checkConnection();
 
 // ------------------------------
