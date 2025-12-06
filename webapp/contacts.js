@@ -1,106 +1,101 @@
-let contacts = JSON.parse(localStorage.getItem("emergencyContacts") || "[]");
+/* ===============================
+   LOAD CONTACTS ON START
+=============================== */
+document.addEventListener("DOMContentLoaded", () => {
+    renderContacts();
+});
 
-// Render contacts
-function renderContacts() {
-    const list = document.getElementById("contact-list");
-    list.innerHTML = "";
-
-    contacts.forEach((c, index) => {
-
-        const box = document.createElement("div");
-        box.style.display = "flex";
-        box.style.alignItems = "center";
-        box.style.justifyContent = "space-between";
-        box.style.gap = "15px";
-        box.style.border = "1px solid #ddd";
-        box.style.padding = "12px 15px";
-        box.style.borderRadius = "12px";
-        box.style.marginBottom = "12px";
-        box.style.width = "90%";
-        box.style.maxWidth = "420px";
-        box.style.marginLeft = "auto";
-        box.style.marginRight = "auto";
-        box.style.background = "#fff";
-        box.style.boxShadow = "0 2px 6px rgba(0,0,0,0.12)";
-
-        // Columna izquierda: Nombre y número
-        const left = document.createElement("div");
-        left.style.flex = "1";
-        left.innerHTML = `
-            <div style="font-weight:600; font-size:18px;">${c.name}</div>
-            <div style="color:#555; font-size:15px;">${c.phone}</div>
-        `;
-
-        // Columna derecha: botones
-        const right = document.createElement("div");
-        right.style.display = "flex";
-        right.style.flexDirection = "column";
-        right.style.gap = "6px";
-
-        right.innerHTML = `
-            <button style="padding:6px 10px; font-size:14px;" onclick="editContact(${index})">Edit</button>
-            <button style="padding:6px 10px; font-size:14px;" onclick="deleteContact(${index})">Delete</button>
-            <button style="padding:6px 10px; font-size:14px;" onclick="callContact('${c.phone}')">Call</button>
-        `;
-
-        box.appendChild(left);
-        box.appendChild(right);
-
-        list.appendChild(box);
-    });
-}
-
-
-// Add contact
+/* ===============================
+   SAVE NEW CONTACT
+=============================== */
 function addContact() {
     const name = document.getElementById("name-input").value.trim();
     const phone = document.getElementById("phone-input").value.trim();
 
     if (!name || !phone) {
-        alert("Fill both fields");
+        alert("Please fill name and phone.");
         return;
     }
 
-    contacts.push({ name, phone });
-    localStorage.setItem("emergencyContacts", JSON.stringify(contacts));
+    let contacts = JSON.parse(localStorage.getItem("contacts") || "[]");
 
+    contacts.push({ name, phone });
+
+    localStorage.setItem("contacts", JSON.stringify(contacts));
+
+    // limpiar campos
     document.getElementById("name-input").value = "";
     document.getElementById("phone-input").value = "";
 
     renderContacts();
 }
 
-// Edit contact
+/* ===============================
+   RENDER CONTACT LIST
+=============================== */
+function renderContacts() {
+    const list = document.getElementById("contact-list");
+    list.innerHTML = "";
+
+    let contacts = JSON.parse(localStorage.getItem("contacts") || "[]");
+
+    contacts.forEach((c, index) => {
+        const card = document.createElement("div");
+        card.className = "contact-card";
+
+        card.innerHTML = `
+            <div class="contact-info">
+                <strong>${c.name}</strong>
+                <span>${c.phone}</span>
+            </div>
+
+            <div class="contact-actions">
+                <button class="action-btn" onclick="callContact('${c.phone}')">📞</button>
+                <button class="action-btn" onclick="editContact(${index})">✏️</button>
+                <button class="action-btn" onclick="deleteContact(${index})">🗑️</button>
+            </div>
+        `;
+
+        list.appendChild(card);
+    });
+}
+
+/* ===============================
+   DELETE CONTACT
+=============================== */
+function deleteContact(index) {
+    let contacts = JSON.parse(localStorage.getItem("contacts") || "[]");
+    contacts.splice(index, 1);
+    localStorage.setItem("contacts", JSON.stringify(contacts));
+    renderContacts();
+}
+
+/* ===============================
+   EDIT CONTACT
+=============================== */
 function editContact(index) {
+    let contacts = JSON.parse(localStorage.getItem("contacts") || "[]");
+
     const newName = prompt("New name:", contacts[index].name);
     const newPhone = prompt("New phone:", contacts[index].phone);
 
     if (!newName || !newPhone) return;
 
-    contacts[index].name = newName;
-    contacts[index].phone = newPhone;
-
-    localStorage.setItem("emergencyContacts", JSON.stringify(contacts));
+    contacts[index] = { name: newName, phone: newPhone };
+    localStorage.setItem("contacts", JSON.stringify(contacts));
     renderContacts();
 }
 
-// Delete contact
-function deleteContact(index) {
-    if (!confirm("Delete this contact?")) return;
-
-    contacts.splice(index, 1);
-    localStorage.setItem("emergencyContacts", JSON.stringify(contacts));
-    renderContacts();
-}
-
-// Call feature
+/* ===============================
+   DIAL CONTACT
+=============================== */
 function callContact(phone) {
-    alert("Calling " + phone);
+    alert("Simulating call to " + phone);
 }
 
-// Back button
+/* ===============================
+   BACK
+=============================== */
 function goBack() {
     window.location.href = "index.html";
 }
-
-document.addEventListener("DOMContentLoaded", renderContacts);

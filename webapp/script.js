@@ -1,15 +1,16 @@
+// ===============================================
+//  GLOBAL STATE (COMPARTIDO ENTRE TODAS LAS PÁGINAS)
+// ===============================================
 let emergencyActive = false;
-let deviceOn = false;
 let lastEmergencyState = false;
-let countdownTimer = null;
-let countdownActive = false;
-let connectionFails = 0;
 
-// ------------------------------
-// 1. ESTADO DEL SISTEMA
-// ------------------------------
+// ===============================================
+//  UI: ACTUALIZAR BOTÓN PRINCIPAL
+// ===============================================
 function updateSystemStatus(connected, emergency) {
     const statusBtn = document.getElementById("main-btn");
+
+    if (!statusBtn) return; // algunas páginas no tienen el botón
 
     if (!connected) {
         statusBtn.style.background = "#999";
@@ -18,114 +19,111 @@ function updateSystemStatus(connected, emergency) {
     }
 
     if (emergency) {
-        statusBtn.style.background = "#d93d33"; // rojo
+        statusBtn.style.background = "#d93d33";
         statusBtn.textContent = "CANCEL EMERGENCY";
     } else {
-        statusBtn.style.background = "#2ecc71"; // verde
+        statusBtn.style.background = "#2ecc71";
         statusBtn.textContent = "SYSTEM NORMAL";
     }
 }
 
-// ------------------------------
-// 2. CONSULTAR AL ESP32 (con timeout)
-// ------------------------------
+// ===============================================
+//  POLLING AL ESP32 (CADA PÁGINA LO HACE)
+// ===============================================
 function checkConnection() {
-    const url = "http://192.168.100.29/status?ts=" + Date.now();
-
-    fetch(url, { cache: "no-store" })
+    fetch("http://192.168.100.29/status")
         .then(res => res.json())
         .then(data => {
-            connectionFails = 0;
-
+            // Estado actual del ESP32
             emergencyActive = data.emergency;
-            updateSystemStatus(true, emergencyActive);
-            document.getElementById("mcu-status").textContent = "MCU Connected";
 
-            if (data.emergency !== lastEmergencyState) {
-                if (data.emergency) startCountdown();
-                else stopCountdown();
+            // Mostrar estado de MCU si existe en la página
+            const mcuStatus = document.getElementById("mcu-status");
+            if (mcuStatus) {
+                mcuStatus.textContent = data.connected
+                    ? "MCU Connected"
+                    : "MCU Offline";
             }
 
-            lastEmergencyState = data.emergency;
+            // Si emergencia ACTIVADA y no existe timestamp → crearlo
+            if (data.emergency && !localStorage.getItem("emergencyStart")) {
+                localStorage.setItem("emergencyStart", Date.now());
+            }
+
+            // Si emergencia DESACTIVADA → borrar timestamp
+            if (!data.emergency) {
+                localStorage.removeItem("emergencyStart");
+            }
+
+            updateSystemStatus(true, data.emergency);
         })
         .catch(() => {
-            connectionFails++;
-            if (connectionFails >= 2) {
-                updateSystemStatus(false, false);
-                document.getElementById("mcu-status").textContent = "MCU Offline";
-            }
+            // Sin conexión
+            updateSystemStatus(false, false);
+
+            const mcuStatus = document.getElementById("mcu-status");
+            if (mcuStatus) mcuStatus.textContent = "MCU Offline";
         });
 }
 
-
-
-// ------------------------------
-// 3. 911 CALL
-// ------------------------------
-function startCountdown() {
-    if (countdownActive) return; // evita reinicios dobles
-    countdownActive = true;
-
+// ===============================================
+//  CONTADOR GLOBAL (BASADO EN TIMESTAMP)
+// ===============================================
+function updateCountdown() {
     const box = document.getElementById("countdown-box");
     const text = document.getElementById("countdown-text");
 
-    box.classList.remove("hidden");
+    if (!box || !text) return; // esta página no tiene contador
 
-    let seconds = 3;
+    const ts = localStorage.getItem("emergencyStart");
 
-    text.textContent = `Calling in ${seconds}...`;
-
-    countdownTimer = setInterval(() => {
-        seconds--;
-
-        if (seconds > 0) {
-            text.textContent = `Calling in ${seconds}...`;
-        } else {
-            clearInterval(countdownTimer);
-            text.textContent = "Llamando...";
-            countdownActive = false;
-        }
-
-    }, 1000);
-}
-
-// Oculta la cuenta regresiva y cancela timers
-function stopCountdown() {
-    const box = document.getElementById("countdown-box");
-    box.classList.add("hidden");
-
-    if (countdownTimer) {
-        clearInterval(countdownTimer);
-        countdownTimer = null;
-    }
-
-    countdownActive = false;
-}
-
-setInterval(checkConnection, 200);
-
-checkConnection();
-
-// ------------------------------
-// 3. BOTONES
-// ------------------------------
-function cancelEmergency() {
-    if (!emergencyActive) {
-        console.log("SYSTEM NORMAL presionado.");
+    if (!ts) {
+        box.classList.add("hidden");
         return;
     }
 
+    box.classList.remove("hidden");
+
+    const diff = (Date.now() - ts) / 1000;
+    const remaining = 8 - diff;
+
+    if (remaining > 0) {
+        text.textContent = `Calling in ${Math.ceil(remaining)}...`;
+    } else {
+        text.textContent = "Llamando...";
+    }
+}
+
+// ===============================================
+//  CANCELACIÓN DE EMERGENCIA (ESP32 + UI GLOBAL)
+// ===============================================
+function cancelEmergency() {
+    if (!emergencyActive) return;
+
     fetch("http://192.168.100.29/cancel")
         .then(() => {
-            console.log("Cancel sent");
+            localStorage.removeItem("emergencyStart");
             emergencyActive = false;
             updateSystemStatus(true, false);
-            stopCountdown();
         })
         .catch(() => alert("No connection with the device"));
 }
 
+// ===============================================
+//  LLAMAR AL 911 (POR AHORA SOLO SIMULADO)
+// ===============================================
 function call911() {
-    console.log("CALL 911 triggered");
     alert("Calling 911...");
 }
+
+// ===============================================
+//  LOOP GLOBAL PARA TODAS LAS PÁGINAS
+// ===============================================
+setInterval(() => {
+    checkConnection();
+    updateCountdown();
+}, 600);
+
+// Primera ejecución inmediata
+checkConnection();
+updateCountdown();

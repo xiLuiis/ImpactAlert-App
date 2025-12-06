@@ -1,3 +1,6 @@
+/* ===========================
+   GENERAL
+=========================== */
 body {
     margin: 0;
     padding: 0;
@@ -7,60 +10,16 @@ body {
 
 .container {
     width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 20px;
     text-align: center;
-    margin-top: 60px;
 }
 
+/* ===========================
+   BOTÓN PRINCIPAL
+=========================== */
 .emergency-btn {
-    background: #d93d33;
-    color: white;
-    font-size: 32px;
-    font-weight: bold;
-    border: none;
-    width: 260px;
-    height: 260px;
-    border-radius: 50%;
-    cursor: pointer;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-}
-
-.options {
-    margin-top: 60px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    align-items: center;
-}
-
-.option-btn {
-    width: 80%;
-    max-width: 350px;
-    padding: 18px;
-    background: white;
-    border: none;
-    border-radius: 15px;
-    font-size: 18px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    box-shadow: 0 3px 8px rgba(0,0,0,0.12);
-    cursor: pointer;
-}
-
-.icon {
-    font-size: 22px;
-}
-
-.status {
-    text-align: center;
-    margin-top: 20px;
-    font-size: 20px;
-    font-weight: bold;
-    color: #555;
-}
-
-/* MAIN BUTTON STATES */
-.main-btn-normal {
     background: #2ecc71;
     color: white;
     font-size: 32px;
@@ -73,53 +32,55 @@ body {
     box-shadow: 0 4px 10px rgba(0,0,0,0.2);
 }
 
-.main-btn-emergency {
-    background: #d93d33;
-}
-
-.main-btn-canceling {
-    background: orange;
-}
-
-/* Big 911 Button */
-.big-option-btn {
-    width: 80%;
-    max-width: 350px;
-    padding: 30px;
-    background: #ff3b30;
-    color: white;
-    border: none;
-    border-radius: 15px;
-    font-size: 26px;
-    font-weight: bold;
-    margin-top: 40px;
-    box-shadow: 0 3px 8px rgba(0,0,0,0.18);
-    cursor: pointer;
-}
-
+/* ===========================
+   STATUS TEXT
+=========================== */
 .status-text {
-    text-align: center;
     font-size: 18px;
     font-weight: 500;
-    margin-top: 20px;
     margin-bottom: 30px;
     color: #333;
 }
 
-#main-btn {
-    display: block;
-    margin: 0 auto;
+/* ===========================
+   OPTIONS LIST
+=========================== */
+.options {
+    margin-top: 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.option-btn {
+    width: 100%;
+    padding: 18px;
+    background: white;
+    border: none;
+    border-radius: 15px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: center;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.12);
+    cursor: pointer;
+    text-decoration: none;
+    color: black;
 }
 
 .call-btn {
-    font-size: 20px;
+    background: #ff3b30;
+    color: white;
     font-weight: bold;
-    padding: 22px;
 }
 
+/* ===========================
+   COUNTDOWN
+=========================== */
 .countdown {
     margin-top: 20px;
-    font-size: 26px;
+    font-size: 28px;
     font-weight: bold;
     color: #d93d33;
     transition: opacity .3s ease;
@@ -130,45 +91,152 @@ body {
     pointer-events: none;
 }
 
-/* CONTACT CARDS */
+/* ===========================
+   CONTACT CARDS
+=========================== */
 .contact-card {
+    width: 100%;
+    background: white;
+    padding: 14px;
+    border-radius: 10px;
+    margin-top: 14px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.12);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: white;
-    border-radius: 12px;
-    padding: 12px 15px;
-    margin: 12px auto;
-    width: 90%;
-    max-width: 420px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.12);
 }
 
 .contact-info {
-    flex: 1;
-}
-
-.contact-name {
-    font-size: 18px;
-    font-weight: 600;
-}
-
-.contact-phone {
-    color: #555;
-    font-size: 15px;
-}
-
-.contact-buttons {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    text-align: left;
 }
 
-.small-btn {
-    padding: 6px 10px;
-    font-size: 14px;
-    border-radius: 6px;
-    border: 1px solid #ccc;
-    background: #f5f5f5;
+.contact-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.action-btn {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: none;
     cursor: pointer;
+    font-size: 14px;
+}
+
+/* ===========================
+   BACK BUTTON
+=========================== */
+.back-btn {
+    margin-top: 40px;
+    padding: 14px 20px;
+    background: #ddd;
+    border: none;
+    border-radius: 10px;
+    font-size: 18px;
+    cursor: pointer;
+    width: 80%;
+}
+
+.sensor-box {
+    margin: 10px auto;
+    padding: 12px;
+    width: 150px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.12);
+    font-size: 22px;
+    font-weight: bold;
+}
+
+/* ====== Top bar (status + debug) ====== */
+.top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.status-text-small {
+    font-size: 14px;
+    color: #555;
+}
+
+/* DEBUG switch */
+.debug-switch {
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.debug-switch input {
+    margin-right: 6px;
+}
+
+/* Page titles */
+.page-title {
+    font-size: 26px;
+    margin-top: 10px;
+    margin-bottom: 20px;
+}
+
+/* Labels */
+.label {
+    font-size: 18px;
+    margin-bottom: 5px;
+}
+
+/* Unified value box */
+.value-box {
+    background: white;
+    padding: 12px;
+    border-radius: 8px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.12);
+    font-size: 20px;
+    font-weight: bold;
+    width: 100%;
+    margin: 0 auto 15px auto;
+}
+
+/* Full-width inputs/buttons */
+.full-width {
+    width: 100%;
+    max-width: 350px;
+    margin: 0 auto;
+}
+
+/* Smaller, cleaner threshold value box */
+.value-box-small {
+    background: white;
+    padding: 10px;
+    border-radius: 10px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.12);
+    font-size: 20px;
+    font-weight: bold;
+    width: 200px;
+    margin: 0 auto 15px auto;
+}
+
+/* Sensor small box */
+.sensor-box-small {
+    background: white;
+    padding: 10px;
+    width: 140px;
+    margin: 10px auto;
+    font-size: 20px;
+    border-radius: 10px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.12);
+    font-weight: bold;
+}
+
+/* Debug switch unified */
+.debug-switch {
+    font-size: 16px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.debug-switch input {
+    margin-right: 6px;
 }
