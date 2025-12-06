@@ -90,7 +90,6 @@ void handleTriggerEmergency() {
 // ----------------------------------
 void setup() {
   Serial.begin(115200);
-
   WiFi.begin(ssid, password);
   Serial.print("Conectando a WiFi");
 
@@ -104,9 +103,9 @@ void setup() {
 
   server.on("/encender", handleEncender);
   server.on("/apagar", handleApagar);
+  server.on("/status", handleStatus);
   server.on("/leer", handleLeer);
   server.on("/cancel", handleCancel);
-  server.on("/status", handleStatus);
   server.on("/trigger", handleTriggerEmergency);
 
   server.begin();
