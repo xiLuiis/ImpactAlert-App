@@ -1,6 +1,5 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#include "secrets.h"
 
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
