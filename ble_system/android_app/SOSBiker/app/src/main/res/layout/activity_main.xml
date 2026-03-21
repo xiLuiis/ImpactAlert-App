@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FAFAFA"
+    android:padding="16dp">
+
+    <!-- Tabs simples -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnTabHome"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Home" />
+
+        <Button
+            android:id="@+id/btnTabBle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="BLE Data" />
+    </LinearLayout>
+
+    <!-- HOME -->
+    <LinearLayout
+        android:id="@+id/homePage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:layout_marginTop="18dp">
+
+        <TextView
+            android:id="@+id/txtMcuStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="MCU Status: Checking..."
+            android:textSize="18sp"
+            android:textColor="#333333" />
+
+        <Button
+            android:id="@+id/btnMain"
+            android:layout_width="260dp"
+            android:layout_height="260dp"
+            android:layout_marginTop="28dp"
+            android:backgroundTint="#2ECC71"
+            android:text="SYSTEM NORMAL"
+            android:textColor="#FFFFFF"
+            android:textSize="28sp" />
+
+        <TextView
+            android:id="@+id/txtCountdown"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text=""
+            android:textColor="#D93D33"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="36dp">
+
+            <Button
+                android:id="@+id/btnConnectBle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Connect BLE Sensor" />
+
+            <Button
+                android:id="@+id/btnEmergency"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:backgroundTint="#FF3B30"
+                android:text="CALL 911"
+                android:textColor="#FFFFFF" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- BLE DATA -->
+    <ScrollView
+        android:id="@+id/blePage"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:layout_marginTop="18dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="BLE Debug"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/txtBleStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="BLE: disconnected"
+                android:textSize="18sp" />
+
+            <TextView
+                android:id="@+id/txtAcc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="ACC: -" />
+
+            <TextView
+                android:id="@+id/txtGyro"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="GYRO: -" />
+
+            <TextView
+                android:id="@+id/txtAccMag"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="ACC MAG: -" />
+
+            <TextView
+                android:id="@+id/txtGyroMag"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="GYRO MAG: -" />
+
+            <TextView
+                android:id="@+id/txtCrashState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Crash state: NORMAL"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>
