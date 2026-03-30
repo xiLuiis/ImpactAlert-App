@@ -1,193 +1,159 @@
-#include <Arduino.h>
 #include <ArduinoBLE.h>
 #include <Wire.h>
 #include "LSM6DS3.h"
+#include <PDM.h>
+#include <math.h>
 
-static const char* BLE_NAME = "SOS_Biker_XIAO";
-
-BLEService imuService("19B10000-E8F2-537E-4F6C-D104768A1214");
-
-BLECharacteristic statusChar(
-  "19B10001-E8F2-537E-4F6C-D104768A1214",
-  BLERead | BLENotify,
-  20
-);
-
-BLECharacteristic accChar(
-  "19B10002-E8F2-537E-4F6C-D104768A1214",
-  BLERead | BLENotify,
-  20
-);
-
-BLECharacteristic gyroChar(
-  "19B10003-E8F2-537E-4F6C-D104768A1214",
-  BLERead | BLENotify,
-  20
-);
-
+// IMU
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
 
-bool imuOk = false;
-bool wasConnected = false;
+// BLE
+BLEService sosService("19B10000-E8F2-537E-4F6C-D104768A1214");
+BLEStringCharacteristic sensorCharacteristic(
+  "19B10001-E8F2-537E-4F6C-D104768A1214",
+  BLERead | BLENotify,
+  120
+);
 
-// TIMERS
-uint32_t lastSensorRead = 0;
-uint32_t lastBleAccSend = 0;
-uint32_t lastBleGyroSend = 0;
-uint32_t lastStatusMsg = 0;
-uint32_t lastDebugMsg = 0;
+// Tiempo
+unsigned long lastSample = 0;
+const unsigned long sampleIntervalMs = 100;
 
-// DATA
-float ax = 0, ay = 0, az = 0;
-float gx = 0, gy = 0, gz = 0;
+// Micrófono
+short sampleBuffer[256];
+volatile int samplesRead = 0;
+int micLevel = 0;
+
+// Detección de audio
+bool loudSoundDetected = false;
+int micThreshold = 1200;
+int audioCounter = 0;
+const int audioTriggerCount = 3;
+
+void onPDMdata() {
+  int bytesAvailable = PDM.available();
+  PDM.read(sampleBuffer, bytesAvailable);
+  samplesRead = bytesAvailable / 2;
+}
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
-
-  Serial.println("=== SOS Biker XIAO Boot ===");
-
-  if (myIMU.begin() == 0) {
-    imuOk = true;
-    Serial.println("IMU init OK");
-  } else {
-    Serial.println("IMU init FAIL");
+  while (!Serial) {
+    delay(10);
   }
 
+  Serial.println("Iniciando SOS Biker...");
+
+  Wire.begin();
+
+  // IMU
+  if (myIMU.begin() != 0) {
+    Serial.println("Error IMU");
+    while (1) {
+      delay(1000);
+    }
+  }
+  Serial.println("IMU OK");
+
+  // MIC
+  PDM.onReceive(onPDMdata);
+  if (!PDM.begin(1, 16000)) {
+    Serial.println("Error MIC");
+    while (1) {
+      delay(1000);
+    }
+  }
+  Serial.println("MIC OK");
+
+  // BLE
   if (!BLE.begin()) {
-    Serial.println("BLE begin FAIL");
-    while (1);
+    Serial.println("Error BLE");
+    while (1) {
+      delay(1000);
+    }
   }
 
-  Serial.println("BLE begin OK");
+  BLE.setLocalName("SOS_Biker");
+  BLE.setDeviceName("SOS_Biker");
+  BLE.setAdvertisedService(sosService);
 
-  BLE.setLocalName(BLE_NAME);
-  BLE.setAdvertisedService(imuService);
+  sosService.addCharacteristic(sensorCharacteristic);
+  BLE.addService(sosService);
 
-  imuService.addCharacteristic(statusChar);
-  imuService.addCharacteristic(accChar);
-  imuService.addCharacteristic(gyroChar);
-  BLE.addService(imuService);
-
+  sensorCharacteristic.writeValue("Listo");
   BLE.advertise();
-  Serial.print("Advertising as: ");
-  Serial.println(BLE_NAME);
+
+  Serial.println("BLE listo");
+  Serial.println("Formato: ax,ay,az,gx,gy,gz,amag,mic,alerta");
 }
 
 void loop() {
-  BLE.poll();
+  unsigned long now = millis();
 
-  BLEDevice central = BLE.central();
+  // Procesar audio siempre
+  if (samplesRead) {
+    long sum = 0;
 
-  // ===== DEBUG GENERAL CADA 1s =====
-  if (millis() - lastDebugMsg >= 1000) {
-    lastDebugMsg = millis();
-
-    Serial.print("[DEBUG] imuOk=");
-    Serial.print(imuOk ? "true" : "false");
-    Serial.print(" | wasConnected=");
-    Serial.print(wasConnected ? "true" : "false");
-    Serial.print(" | central=");
-    Serial.print(central ? "yes" : "no");
-
-    if (central) {
-      Serial.print(" | connected=");
-      Serial.print(central.connected() ? "true" : "false");
-      Serial.print(" | addr=");
-      Serial.print(central.address());
+    for (int i = 0; i < samplesRead; i++) {
+      sum += abs(sampleBuffer[i]);
     }
 
-    Serial.println();
+    micLevel = sum / samplesRead;
+    samplesRead = 0;
   }
 
-  // ===== CONEXION =====
-  if (central && !wasConnected) {
-    wasConnected = true;
-    Serial.println("Central detected -> writing CONNECTED");
-    statusChar.writeValue("CONNECTED");
-  }
-
-  // ===== LECTURA SIEMPRE =====
-  if (imuOk && millis() - lastSensorRead >= 200) {
-    lastSensorRead = millis();
-
-    ax = myIMU.readFloatAccelX();
-    ay = myIMU.readFloatAccelY();
-    az = myIMU.readFloatAccelZ();
-
-    gx = myIMU.readFloatGyroX();
-    gy = myIMU.readFloatGyroY();
-    gz = myIMU.readFloatGyroZ();
-
-    Serial.print("ACC: ");
-    Serial.print(ax, 2);
-    Serial.print(", ");
-    Serial.print(ay, 2);
-    Serial.print(", ");
-    Serial.print(az, 2);
-
-    Serial.print(" | GYRO: ");
-    Serial.print(gx, 2);
-    Serial.print(", ");
-    Serial.print(gy, 2);
-    Serial.print(", ");
-    Serial.println(gz, 2);
-  }
-
-  // ===== ENVIO BLE =====
-  if (central && central.connected()) {
-
-    // ACC
-    if (millis() - lastBleAccSend >= 100) {
-      lastBleAccSend = millis();
-
-      String accMsg = String(ax, 1) + "," + String(ay, 1) + "," + String(az, 1);
-      bool ok = accChar.writeValue(accMsg.c_str());
-
-      Serial.print("BLE ACC -> ");
-      Serial.print(accMsg);
-      Serial.print(" | write ok = ");
-      Serial.println(ok ? "true" : "false");
-    }
-
-    // GYRO
-    if (millis() - lastBleGyroSend >= 100) {
-      lastBleGyroSend = millis();
-
-      String gyroMsg = String(gx, 1) + "," + String(gy, 1) + "," + String(gz, 1);
-      bool ok = gyroChar.writeValue(gyroMsg.c_str());
-
-      Serial.print("BLE GYRO -> ");
-      Serial.print(gyroMsg);
-      Serial.print(" | write ok = ");
-      Serial.println(ok ? "true" : "false");
-    }
-
-    // STATUS
-    if (millis() - lastStatusMsg >= 300) {
-      lastStatusMsg = millis();
-
-      const char* statusMsg = imuOk ? "IMU_OK" : "IMU_FAIL";
-      bool ok = statusChar.writeValue(statusMsg);
-
-      Serial.print("BLE STATUS -> ");
-      Serial.print(statusMsg);
-      Serial.print(" | write ok = ");
-      Serial.println(ok ? "true" : "false");
-    }
+  // Detección estable de sonido fuerte
+  if (micLevel > micThreshold) {
+    audioCounter++;
   } else {
-    // Esto ayuda a comprobar si el problema es que nunca entra a connected()
-    static uint32_t lastNoConnMsg = 0;
-    if (millis() - lastNoConnMsg >= 1000) {
-      lastNoConnMsg = millis();
-      Serial.println("BLE not connected yet -> no ACC/GYRO notify sent");
+    audioCounter = 0;
+  }
+
+  loudSoundDetected = (audioCounter >= audioTriggerCount);
+
+  // Lectura periódica
+  if (now - lastSample >= sampleIntervalMs) {
+    lastSample = now;
+
+    float ax = myIMU.readFloatAccelX();
+    float ay = myIMU.readFloatAccelY();
+    float az = myIMU.readFloatAccelZ();
+
+    float gx = myIMU.readFloatGyroX();
+    float gy = myIMU.readFloatGyroY();
+    float gz = myIMU.readFloatGyroZ();
+
+    float amag = sqrt(ax * ax + ay * ay + az * az);
+
+    // Debug serial
+    Serial.print(ax, 3); Serial.print(",");
+    Serial.print(ay, 3); Serial.print(",");
+    Serial.print(az, 3); Serial.print(",");
+    Serial.print(gx, 3); Serial.print(",");
+    Serial.print(gy, 3); Serial.print(",");
+    Serial.print(gz, 3); Serial.print(",");
+    Serial.print(amag, 3); Serial.print(",");
+    Serial.print(micLevel); Serial.print(",");
+    Serial.println(loudSoundDetected ? "1" : "0");
+
+    if (loudSoundDetected) {
+      Serial.print("🚨 ALERTA AUDIO | micLevel = ");
+      Serial.println(micLevel);
+      sensorCharacteristic.writeValue("SOS,AUDIO=1");
+    } else {
+      String payload = String(ax, 3) + "," +
+                       String(ay, 3) + "," +
+                       String(az, 3) + "," +
+                       String(gx, 3) + "," +
+                       String(gy, 3) + "," +
+                       String(gz, 3) + "," +
+                       String(amag, 3) + "," +
+                       String(micLevel) + "," +
+                       String("0");
+
+      sensorCharacteristic.writeValue(payload);
     }
   }
 
-  // ===== DESCONEXION =====
-  if (wasConnected && (!central || !central.connected())) {
-    wasConnected = false;
-    Serial.println("Central disconnected -> advertising again");
-    BLE.advertise();
-  }
+  BLE.poll();
 }
