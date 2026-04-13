@@ -32,6 +32,7 @@ class BleManager(
     private val statusUuid = UUID.fromString("19B10001-E8F2-537E-4F6C-D104768A1214")
     private val accUuid = UUID.fromString("19B10002-E8F2-537E-4F6C-D104768A1214")
     private val gyroUuid = UUID.fromString("19B10003-E8F2-537E-4F6C-D104768A1214")
+    private val commandUuid = UUID.fromString("19B10004-E8F2-537E-4F6C-D104768A1214")
     private val cccdUuid = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
 
     private val bluetoothManager =
@@ -41,6 +42,7 @@ class BleManager(
     private var bluetoothGatt: BluetoothGatt? = null
 
     private var notifyQueue: MutableList<BluetoothGattCharacteristic> = mutableListOf()
+    private var commandCharacteristic: BluetoothGattCharacteristic? = null
 
     @SuppressLint("MissingPermission")
     fun startScan() {
@@ -59,7 +61,38 @@ class BleManager(
         bluetoothGatt?.disconnect()
         bluetoothGatt?.close()
         bluetoothGatt = null
+        commandCharacteristic = null
+        notifyQueue.clear()
         listener.onBleStatus("BLE: disconnected")
+    }
+
+    @SuppressLint("MissingPermission")
+    fun sendCommand(command: String): Boolean {
+        val gatt = bluetoothGatt ?: run {
+            listener.onBleStatus("BLE: no gatt for command")
+            return false
+        }
+
+        val characteristic = commandCharacteristic ?: run {
+            listener.onBleStatus("BLE: command characteristic not found")
+            return false
+        }
+
+        val payload = command.toByteArray(Charsets.UTF_8)
+
+        return try {
+            characteristic.value = payload
+            val ok = gatt.writeCharacteristic(characteristic)
+
+            if (!ok) {
+                listener.onBleStatus("BLE: command write failed")
+            }
+
+            ok
+        } catch (e: Exception) {
+            listener.onBleStatus("BLE: command error ${e.message}")
+            false
+        }
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -84,6 +117,8 @@ class BleManager(
                 listener.onBleStatus("BLE: connected")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                commandCharacteristic = null
+                notifyQueue.clear()
                 listener.onBleStatus("BLE: disconnected")
             }
         }
@@ -99,6 +134,7 @@ class BleManager(
             val statusChar = service.getCharacteristic(statusUuid)
             val accChar = service.getCharacteristic(accUuid)
             val gyroChar = service.getCharacteristic(gyroUuid)
+            commandCharacteristic = service.getCharacteristic(commandUuid)
 
             notifyQueue.clear()
 
