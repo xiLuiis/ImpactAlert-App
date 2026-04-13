@@ -74,7 +74,14 @@
                 android:id="@+id/btnConnectBle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Connect BLE Sensor" />
+                android:text="Scan Devices" />
+
+            <Button
+                android:id="@+id/btnEmergencyContacts"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Emergency Contacts" />
 
             <Button
                 android:id="@+id/btnEmergency"
@@ -84,6 +91,15 @@
                 android:backgroundTint="#FF3B30"
                 android:text="CALL 911"
                 android:textColor="#FFFFFF" />
+
+            <CheckBox
+                android:id="@+id/chkDebugMode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="DEBUG"
+                android:textSize="12sp" />
+
         </LinearLayout>
     </LinearLayout>
 
@@ -106,6 +122,15 @@
                 android:text="BLE Debug"
                 android:textSize="24sp"
                 android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnTestAlert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="TEST ALERT (DEBUG)"
+                android:backgroundTint="#FF9800"
+                android:textColor="#FFFFFF" />
 
             <TextView
                 android:id="@+id/txtBleStatus"

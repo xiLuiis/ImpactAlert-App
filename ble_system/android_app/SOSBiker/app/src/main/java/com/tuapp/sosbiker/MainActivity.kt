@@ -16,6 +16,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
@@ -23,6 +24,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import kotlin.math.abs
 import kotlin.math.sqrt
+import android.widget.CheckBox
+import android.widget.CompoundButton
+import java.net.URLEncoder
 
 class MainActivity : AppCompatActivity(), BleManager.Listener {
 
@@ -32,6 +36,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private lateinit var btnTabBle: Button
     private lateinit var homePage: LinearLayout
     private lateinit var blePage: ScrollView
+    private lateinit var chkDebugMode: CheckBox
 
     private lateinit var txtMcuStatus: TextView
     private lateinit var txtCountdown: TextView
@@ -45,6 +50,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private lateinit var btnMain: Button
     private lateinit var btnConnectBle: Button
     private lateinit var btnEmergency: Button
+    private lateinit var btnTestAlert: Button
+    private lateinit var btnEmergencyContacts: Button
 
     private var latestAccText: String = ""
     private var latestGyroText: String = ""
@@ -59,6 +66,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private var countdownTimer: CountDownTimer? = null
     private var bleConnected = false
     private var bleSubscribed = false
+    private var debugModeEnabled = false
 
     private enum class CrashState {
         NORMAL,
@@ -72,23 +80,16 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private var stillnessStartMs = 0L
 
     // ===== Thresholds =====
-    // impacto fuerte real
     private val impactThreshold = 6.5
-
-    // cambio brusco entre muestras
     private val deltaAccThreshold = 2.5
     private val deltaGyroThreshold = 220.0
-
-    // combo para que el gyro no active solo
     private val minAccForRotationEvent = 3.5
 
-    // quietud real
     private val stillAccMin = 0.90
     private val stillAccMax = 1.10
     private val stillGyroThreshold = 10.0
     private val stillnessRequiredMs = 1800L
 
-    // ventanas
     private val eventWindowMs = 1000L
     private val postEventWindowMs = 5000L
 
@@ -107,10 +108,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private val emergencyChannelId = "emergency_channel_v2"
     private val crashDetectedNotificationId = 1001
     private val countdownNotificationId = 1002
-
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            bleManager.startScan()
+            startBleAutoConnect()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         btnTabBle = findViewById(R.id.btnTabBle)
         homePage = findViewById(R.id.homePage)
         blePage = findViewById(R.id.blePage)
+        chkDebugMode = findViewById(R.id.chkDebugMode)
 
         txtMcuStatus = findViewById(R.id.txtMcuStatus)
         txtCountdown = findViewById(R.id.txtCountdown)
@@ -136,14 +137,40 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         btnMain = findViewById(R.id.btnMain)
         btnConnectBle = findViewById(R.id.btnConnectBle)
         btnEmergency = findViewById(R.id.btnEmergency)
+        btnTestAlert = findViewById(R.id.btnTestAlert)
+        btnEmergencyContacts = findViewById(R.id.btnEmergencyContacts)
 
         showHome()
 
         btnTabHome.setOnClickListener { showHome() }
-        btnTabBle.setOnClickListener { showBle() }
+
+        btnTabBle.setOnClickListener {
+            if (debugModeEnabled) {
+                showBle()
+            } else {
+                Toast.makeText(this, "Enable DEBUG mode first", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        chkDebugMode.setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean ->
+            debugModeEnabled = isChecked
+            updateDebugUIVisibility()
+
+            if (!debugModeEnabled && blePage.visibility == View.VISIBLE) {
+                showHome()
+            }
+        }
 
         btnConnectBle.setOnClickListener {
-            requestBlePermissionsAndScan()
+            requestBlePermissionsAndAutoConnect()
+        }
+
+        btnTestAlert.setOnClickListener {
+            triggerEmergencyTest()
+        }
+
+        btnEmergencyContacts.setOnClickListener {
+            openEmergencyContacts()
         }
 
         btnMain.setOnClickListener {
@@ -160,8 +187,13 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         }
 
         updateMainButton()
+        updateTestAlertButton()
+        updateDebugUIVisibility()
         createEmergencyChannel()
         requestNotificationPermissionIfNeeded()
+
+        // AUTO CONNECT AL ABRIR
+        requestBlePermissionsAndAutoConnect()
     }
 
     private fun showHome() {
@@ -174,6 +206,10 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         blePage.visibility = View.VISIBLE
     }
 
+    private fun updateDebugUIVisibility() {
+        btnTabBle.visibility = if (debugModeEnabled) View.VISIBLE else View.GONE
+        btnTestAlert.visibility = if (debugModeEnabled) View.VISIBLE else View.GONE
+    }
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (
@@ -203,7 +239,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         }
     }
 
-    private fun requestBlePermissionsAndScan() {
+    private fun requestBlePermissionsAndAutoConnect() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val needed = mutableListOf<String>()
 
@@ -224,7 +260,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             if (needed.isNotEmpty()) {
                 permissionLauncher.launch(needed.toTypedArray())
             } else {
-                bleManager.startScan()
+                startBleAutoConnect()
             }
         } else {
             if (
@@ -233,9 +269,13 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             ) {
                 permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
             } else {
-                bleManager.startScan()
+                startBleAutoConnect()
             }
         }
+    }
+
+    private fun startBleAutoConnect() {
+        bleManager.startAutoConnect()
     }
 
     override fun onBleStatus(text: String) {
@@ -248,8 +288,10 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             bleSubscribed = text.contains("subscribed", ignoreCase = true)
 
             txtMcuStatus.text = when {
-                bleConnected -> "MCU Status: Connected"
                 text.contains("scanning", ignoreCase = true) -> "MCU Status: Scanning..."
+                text.contains("device found, connecting", ignoreCase = true) ||
+                        text.contains("connecting", ignoreCase = true) -> "MCU Status: Connecting..."
+                bleConnected -> "MCU Status: Connected"
                 else -> "MCU Status: Offline"
             }
 
@@ -263,20 +305,22 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             }
 
             updateMainButton()
+            updateTestAlertButton()
         }
     }
 
     override fun onStatusValue(text: String) {
         runOnUiThread {
-            txtMcuStatus.text = "MCU Status: $text"
+            // Aquí mostramos el estado que reporta el micro SIN pisar el estado general de MCU/BLE
+            txtBleStatus.text = "BLE: MCU -> $text"
 
             if (
                 text.contains("IMU_OK", ignoreCase = true) ||
                 text.contains("CONNECTED", ignoreCase = true)
             ) {
-                txtBleStatus.text = "BLE: connected"
                 bleConnected = true
                 updateMainButton()
+                updateTestAlertButton()
             }
         }
     }
@@ -530,10 +574,20 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         emergencyActive = true
         emergencyActiveGlobal = true
         txtCrashState.text = "Crash state: EMERGENCY"
+        txtMcuStatus.text = "MCU Status: Emergency Active"
         updateMainButton()
+        updateTestAlertButton()
 
-        bleManager.sendCommand("ALERT_ON")
-        debugCrash("ALERT_ON sent to hardware")
+        val alertSent = bleManager.sendCommand("ALERT_ON")
+        debugCrash("ALERT_ON sent to hardware = $alertSent")
+
+        if (!alertSent) {
+            Toast.makeText(
+                this,
+                "No se pudo enviar ALERT_ON al micro",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
 
         showCrashDetectedNotification()
 
@@ -551,21 +605,116 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             }
 
             override fun onFinish() {
-                txtCountdown.text = "Ready to call 911"
+                txtCountdown.text = "Opening WhatsApp..."
                 NotificationManagerCompat.from(this@MainActivity)
                     .cancel(countdownNotificationId)
+
+                sendWhatsappAlertToAllContacts()
             }
         }.start()
     }
 
+    private fun triggerEmergencyTest() {
+        showBle()
+
+        if (!bleConnected || !bleSubscribed) {
+            Toast.makeText(
+                this,
+                "Test alert unavailable: BLE not connected/subscribed yet",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        if (emergencyActive) {
+            Toast.makeText(this, "Emergency already active", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        Toast.makeText(this, "DEBUG: manual emergency trigger", Toast.LENGTH_SHORT).show()
+
+        // Para pruebas manuales, no queremos que el cooldown estorbe
+        lastEmergencyMs = 0L
+
+        collisionHits++
+        collisionHitsGlobal = collisionHits
+
+        triggerEmergency()
+    }
+
+    private fun openEmergencyContacts() {
+        val intent = Intent(this, EmergencyContactsActivity::class.java)
+        startActivity(intent)
+    }
+
+    private fun getEmergencyPhoneNumbers(): List<String> {
+        return EmergencyContactsStore.getEnabledPhoneNumbers(this)
+    }
+
+    private fun debugShowRegisteredContacts() {
+        val numbers = getEmergencyPhoneNumbers()
+
+        if (numbers.isEmpty()) {
+            Toast.makeText(this, "No emergency contacts registered", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Contacts: ${numbers.joinToString()}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun sendWhatsappAlertToAllContacts() {
+        val numbers = EmergencyContactsStore.getEnabledPhoneNumbers(this)
+
+        if (numbers.isEmpty()) {
+            Toast.makeText(this, "No emergency contacts registered", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val message = buildEmergencyWhatsappMessage()
+
+        // Por ahora abrimos solo el primer contacto (limitación de WhatsApp)
+        openWhatsappWithMessage(numbers.first(), message)
+    }
+
+    private fun buildEmergencyWhatsappMessage(): String {
+        return """
+        🚨 SOS Biker Alert
+        
+        Se detectó una posible caída o accidente.
+        Necesito ayuda.
+        
+        Estado: emergencia confirmada
+    """.trimIndent()
+    }
+
+    private fun openWhatsappWithMessage(phoneNumber: String, message: String) {
+        try {
+            val encodedMessage = URLEncoder.encode(message, "UTF-8")
+            val uri = Uri.parse("https://wa.me/$phoneNumber?text=$encodedMessage")
+
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                setPackage("com.whatsapp")
+            }
+
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                "WhatsApp no está disponible",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
     private fun cancelEmergency() {
-        bleManager.sendCommand("ALERT_OFF")
+        val alertOffSent = bleManager.sendCommand("ALERT_OFF")
+        debugCrash("ALERT_OFF sent to hardware = $alertOffSent")
 
         emergencyActive = false
         emergencyActiveGlobal = false
         collisionHits = 0
         collisionHitsGlobal = 0
         countdownTimer?.cancel()
+        countdownTimer = null
         txtCountdown.text = ""
 
         resetCrashState("Crash state: NORMAL")
@@ -573,7 +722,14 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         NotificationManagerCompat.from(this).cancel(crashDetectedNotificationId)
         NotificationManagerCompat.from(this).cancel(countdownNotificationId)
 
+        txtMcuStatus.text = if (bleConnected) {
+            "MCU Status: Connected"
+        } else {
+            "MCU Status: Offline"
+        }
+
         updateMainButton()
+        updateTestAlertButton()
     }
 
     private fun updateMainButton() {
@@ -602,6 +758,13 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 )
             }
         }
+    }
+
+    private fun updateTestAlertButton() {
+        val enabled = bleConnected && bleSubscribed && !emergencyActive
+
+        btnTestAlert.isEnabled = enabled
+        btnTestAlert.alpha = if (enabled) 1.0f else 0.5f
     }
 
     private fun parseTriple(text: String): Triple<Double, Double, Double>? {
