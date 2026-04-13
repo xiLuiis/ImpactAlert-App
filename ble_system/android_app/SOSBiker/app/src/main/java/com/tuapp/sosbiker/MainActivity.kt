@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -20,6 +21,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import kotlin.math.abs
 import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), BleManager.Listener {
@@ -49,19 +51,63 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
 
     private var accMag = 0.0
     private var gyroMag = 0.0
+    private var lastAccMag = 0.0
+    private var lastGyroMag = 0.0
+
     private var emergencyActive = false
     private var collisionHits = 0
     private var countdownTimer: CountDownTimer? = null
     private var bleConnected = false
     private var bleSubscribed = false
+
+    private enum class CrashState {
+        NORMAL,
+        EVENT_DETECTED,
+        WAITING_FOR_STILLNESS,
+        CONFIRMED
+    }
+
+    private var crashStateMachine = CrashState.NORMAL
+    private var stateStartMs = 0L
+    private var stillnessStartMs = 0L
+
+    // ===== Thresholds =====
+    // impacto fuerte real
+    private val impactThreshold = 6.5
+
+    // cambio brusco entre muestras
+    private val deltaAccThreshold = 2.5
+    private val deltaGyroThreshold = 220.0
+
+    // combo para que el gyro no active solo
+    private val minAccForRotationEvent = 3.5
+
+    // quietud real
+    private val stillAccMin = 0.90
+    private val stillAccMax = 1.10
+    private val stillGyroThreshold = 10.0
+    private val stillnessRequiredMs = 1800L
+
+    // ventanas
+    private val eventWindowMs = 1000L
+    private val postEventWindowMs = 5000L
+
+    private var lastEmergencyMs = 0L
+    private val emergencyCooldownMs = 6000L
+
+    private var peakAccMag = 0.0
+    private var peakGyroMag = 0.0
+
     companion object {
         var emergencyActiveGlobal = false
         var collisionHitsGlobal = 0
         var cancelEmergencyFromNotification = false
     }
 
-    private val emergencyChannelId = "emergency_channel"
-    private val emergencyNotificationId = 1001
+    private val emergencyChannelId = "emergency_channel_v2"
+    private val crashDetectedNotificationId = 1001
+    private val countdownNotificationId = 1002
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             bleManager.startScan()
@@ -127,9 +173,11 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         homePage.visibility = View.GONE
         blePage.visibility = View.VISIBLE
     }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
+            if (
+                ContextCompat.checkSelfPermission(
                     this,
                     Manifest.permission.POST_NOTIFICATIONS
                 ) != PackageManager.PERMISSION_GRANTED
@@ -138,6 +186,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             }
         }
     }
+
     private fun createEmergencyChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -145,24 +194,28 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 "Emergency Alerts",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Crash emergency countdown"
+                description = "Crash and emergency countdown alerts"
+                enableVibration(true)
             }
 
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
     }
+
     private fun requestBlePermissionsAndScan() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val needed = mutableListOf<String>()
 
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
+            if (
+                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
                 != PackageManager.PERMISSION_GRANTED
             ) {
                 needed.add(Manifest.permission.BLUETOOTH_SCAN)
             }
 
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+            if (
+                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
                 != PackageManager.PERMISSION_GRANTED
             ) {
                 needed.add(Manifest.permission.BLUETOOTH_CONNECT)
@@ -174,7 +227,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 bleManager.startScan()
             }
         } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            if (
+                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED
             ) {
                 permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
@@ -199,6 +253,15 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 else -> "MCU Status: Offline"
             }
 
+            if (!bleConnected) {
+                bleSubscribed = false
+                collisionHits = 0
+
+                if (!emergencyActive) {
+                    resetCrashState("Crash state: BLE OFFLINE")
+                }
+            }
+
             updateMainButton()
         }
     }
@@ -207,7 +270,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         runOnUiThread {
             txtMcuStatus.text = "MCU Status: $text"
 
-            if (text.contains("IMU_OK", ignoreCase = true) ||
+            if (
+                text.contains("IMU_OK", ignoreCase = true) ||
                 text.contains("CONNECTED", ignoreCase = true)
             ) {
                 txtBleStatus.text = "BLE: connected"
@@ -221,6 +285,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         latestAccText = text
         val triple = parseTriple(text) ?: return
 
+        lastAccMag = accMag
         accMag = magnitude(triple.first, triple.second, triple.third)
 
         runOnUiThread {
@@ -234,6 +299,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         latestGyroText = text
         val triple = parseTriple(text) ?: return
 
+        lastGyroMag = gyroMag
         gyroMag = magnitude(triple.first, triple.second, triple.third)
 
         runOnUiThread {
@@ -242,11 +308,12 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             evaluateCrash()
         }
     }
-    private fun showEmergencyNotification(secondsLeft: Int) {
+
+    private fun showCrashDetectedNotification() {
         val openIntent = Intent(this, MainActivity::class.java)
         val openPendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            10,
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -257,7 +324,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
 
         val cancelPendingIntent = PendingIntent.getBroadcast(
             this,
-            1,
+            11,
             cancelIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -265,8 +332,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         val notification = NotificationCompat.Builder(this, emergencyChannelId)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle("Crash detected")
-            .setContentText("Calling in $secondsLeft... False alarm?")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentText("Possible accident detected. Emergency sequence started.")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setOngoing(true)
             .setAutoCancel(false)
@@ -278,30 +345,184 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             )
             .build()
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        if (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            NotificationManagerCompat.from(this).notify(emergencyNotificationId, notification)
+            NotificationManagerCompat.from(this)
+                .notify(crashDetectedNotificationId, notification)
         }
-    }    private fun evaluateCrash() {
+    }
+
+    private fun showEmergencyNotification(secondsLeft: Int) {
+        val openIntent = Intent(this, MainActivity::class.java)
+        val openPendingIntent = PendingIntent.getActivity(
+            this,
+            20,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val cancelIntent = Intent(this, EmergencyActionReceiver::class.java).apply {
+            action = "com.tuapp.sosbiker.ACTION_CANCEL_EMERGENCY"
+        }
+
+        val cancelPendingIntent = PendingIntent.getBroadcast(
+            this,
+            21,
+            cancelIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, emergencyChannelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("Emergency countdown")
+            .setContentText("Calling in $secondsLeft... False alarm?")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(openPendingIntent)
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Cancel",
+                cancelPendingIntent
+            )
+            .build()
+
+        if (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            NotificationManagerCompat.from(this)
+                .notify(countdownNotificationId, notification)
+        }
+    }
+
+    private fun debugCrash(message: String) {
+        Log.d("SOS_BIKER_CRASH", message)
+    }
+
+    private fun setCrashState(newState: CrashState, reason: String) {
+        if (crashStateMachine != newState) {
+            debugCrash("${crashStateMachine.name} -> ${newState.name} | $reason")
+            crashStateMachine = newState
+            stateStartMs = System.currentTimeMillis()
+        }
+    }
+
+    private fun resetCrashState(uiText: String = "Crash state: NORMAL") {
+        if (crashStateMachine != CrashState.NORMAL) {
+            debugCrash("${crashStateMachine.name} -> NORMAL | reset")
+        }
+        crashStateMachine = CrashState.NORMAL
+        stateStartMs = 0L
+        stillnessStartMs = 0L
+        peakAccMag = 0.0
+        peakGyroMag = 0.0
+        txtCrashState.text = uiText
+    }
+
+    private fun evaluateCrash() {
         if (emergencyActive) return
+        if (!bleConnected || !bleSubscribed) return
 
-        val linearAcc = kotlin.math.abs(accMag - 1.0)
-        val collisionNow = gyroMag > 100.0 && linearAcc > 0.5
+        val now = System.currentTimeMillis()
 
-        if (collisionNow) {
-            collisionHits++
-        } else {
-            collisionHits = (collisionHits - 1).coerceAtLeast(0)
+        if (now - lastEmergencyMs < emergencyCooldownMs) {
+            return
         }
 
-        if (collisionHits >= 3) {
-            triggerEmergency()
+        val deltaAccMag = abs(accMag - lastAccMag)
+        val deltaGyroMag = abs(gyroMag - lastGyroMag)
+
+        peakAccMag = maxOf(peakAccMag, accMag)
+        peakGyroMag = maxOf(peakGyroMag, gyroMag)
+
+        val isStillNow = accMag in stillAccMin..stillAccMax && gyroMag <= stillGyroThreshold
+
+        if (isStillNow) {
+            if (stillnessStartMs == 0L) {
+                stillnessStartMs = now
+            }
         } else {
-            txtCrashState.text = "Crash state: NORMAL"
+            stillnessStartMs = 0L
+        }
+
+        val stillnessDuration = if (stillnessStartMs == 0L) 0L else now - stillnessStartMs
+        val sustainedStillness = stillnessDuration >= stillnessRequiredMs
+
+        val debugText = "State: ${crashStateMachine.name}\n" +
+                "acc=%.2f dAcc=%.2f\ngyro=%.2f dGyro=%.2f\npeakAcc=%.2f peakGyro=%.2f\nstillMs=%d"
+                    .format(accMag, deltaAccMag, gyroMag, deltaGyroMag, peakAccMag, peakGyroMag, stillnessDuration)
+
+        txtCrashState.text = debugText
+        debugCrash(
+            "state=${crashStateMachine.name} acc=%.2f dAcc=%.2f gyro=%.2f dGyro=%.2f peakAcc=%.2f peakGyro=%.2f stillMs=%d"
+                .format(accMag, deltaAccMag, gyroMag, deltaGyroMag, peakAccMag, peakGyroMag, stillnessDuration)
+        )
+
+        when (crashStateMachine) {
+            CrashState.NORMAL -> {
+                val strongImpact = accMag >= impactThreshold
+                val rotationWithImpact = deltaGyroMag >= deltaGyroThreshold &&
+                        (accMag >= minAccForRotationEvent || deltaAccMag >= deltaAccThreshold)
+
+                if (strongImpact || rotationWithImpact) {
+                    setCrashState(
+                        CrashState.EVENT_DETECTED,
+                        "event detected | acc=%.2f dAcc=%.2f gyro=%.2f dGyro=%.2f"
+                            .format(accMag, deltaAccMag, gyroMag, deltaGyroMag)
+                    )
+                    return
+                }
+            }
+
+            CrashState.EVENT_DETECTED -> {
+                val elapsed = now - stateStartMs
+
+                if (elapsed > eventWindowMs) {
+                    setCrashState(
+                        CrashState.WAITING_FOR_STILLNESS,
+                        "waiting for stillness | peakAcc=%.2f peakGyro=%.2f"
+                            .format(peakAccMag, peakGyroMag)
+                    )
+                    return
+                }
+            }
+
+            CrashState.WAITING_FOR_STILLNESS -> {
+                val elapsed = now - stateStartMs
+
+                if (sustainedStillness) {
+                    setCrashState(
+                        CrashState.CONFIRMED,
+                        "confirmed by sustained stillness | peakAcc=%.2f peakGyro=%.2f stillMs=%d"
+                            .format(peakAccMag, peakGyroMag, stillnessDuration)
+                    )
+
+                    lastEmergencyMs = now
+                    collisionHits++
+                    collisionHitsGlobal = collisionHits
+                    triggerEmergency()
+                    return
+                }
+
+                if (elapsed > postEventWindowMs) {
+                    resetCrashState("Crash state: NORMAL")
+                }
+            }
+
+            CrashState.CONFIRMED -> {
+                txtCrashState.text = "Crash state: EMERGENCY"
+            }
         }
     }
 
@@ -310,6 +531,11 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         emergencyActiveGlobal = true
         txtCrashState.text = "Crash state: EMERGENCY"
         updateMainButton()
+
+        bleManager.sendCommand("ALERT_ON")
+        debugCrash("ALERT_ON sent to hardware")
+
+        showCrashDetectedNotification()
 
         countdownTimer?.cancel()
         countdownTimer = object : CountDownTimer(8000, 1000) {
@@ -326,20 +552,27 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
 
             override fun onFinish() {
                 txtCountdown.text = "Ready to call 911"
-                NotificationManagerCompat.from(this@MainActivity).cancel(emergencyNotificationId)
+                NotificationManagerCompat.from(this@MainActivity)
+                    .cancel(countdownNotificationId)
             }
         }.start()
     }
 
     private fun cancelEmergency() {
+        bleManager.sendCommand("ALERT_OFF")
+
         emergencyActive = false
         emergencyActiveGlobal = false
         collisionHits = 0
         collisionHitsGlobal = 0
-        txtCountdown.text = ""
-        txtCrashState.text = "Crash state: NORMAL"
         countdownTimer?.cancel()
-        NotificationManagerCompat.from(this).cancel(emergencyNotificationId)
+        txtCountdown.text = ""
+
+        resetCrashState("Crash state: NORMAL")
+
+        NotificationManagerCompat.from(this).cancel(crashDetectedNotificationId)
+        NotificationManagerCompat.from(this).cancel(countdownNotificationId)
+
         updateMainButton()
     }
 
