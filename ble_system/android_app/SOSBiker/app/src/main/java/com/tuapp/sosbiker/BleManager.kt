@@ -12,6 +12,8 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import java.util.UUID
 
 class BleManager(
@@ -44,6 +46,31 @@ class BleManager(
     private var notifyQueue: MutableList<BluetoothGattCharacteristic> = mutableListOf()
     private var commandCharacteristic: BluetoothGattCharacteristic? = null
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var isScanning = false
+    private var isConnecting = false
+    private var manualDisconnect = false
+
+    private val scanTimeoutRunnable = Runnable {
+        if (isScanning) {
+            stopScanInternal()
+            listener.onBleStatus("BLE: scan timeout")
+            scheduleReconnect()
+        }
+    }
+
+    private val reconnectRunnable = Runnable {
+        if (!manualDisconnect) {
+            startScan()
+        }
+    }
+
+    fun startAutoConnect() {
+        manualDisconnect = false
+        startScan()
+    }
+
     @SuppressLint("MissingPermission")
     fun startScan() {
         val adapter = bluetoothAdapter
@@ -52,17 +79,47 @@ class BleManager(
             return
         }
 
+        if (bluetoothGatt != null || isScanning || isConnecting) {
+            return
+        }
+
         listener.onBleStatus("BLE: scanning...")
+        isScanning = true
+
         adapter.bluetoothLeScanner?.startScan(scanCallback)
+
+        mainHandler.removeCallbacks(scanTimeoutRunnable)
+        mainHandler.postDelayed(scanTimeoutRunnable, 10000)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopScanInternal() {
+        if (!isScanning) return
+        bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        isScanning = false
+        mainHandler.removeCallbacks(scanTimeoutRunnable)
+    }
+
+    private fun scheduleReconnect() {
+        if (manualDisconnect) return
+        mainHandler.removeCallbacks(reconnectRunnable)
+        mainHandler.postDelayed(reconnectRunnable, 3000)
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
+        manualDisconnect = true
+        mainHandler.removeCallbacks(scanTimeoutRunnable)
+        mainHandler.removeCallbacks(reconnectRunnable)
+        stopScanInternal()
+        isConnecting = false
+
         bluetoothGatt?.disconnect()
         bluetoothGatt?.close()
         bluetoothGatt = null
         commandCharacteristic = null
         notifyQueue.clear()
+
         listener.onBleStatus("BLE: disconnected")
     }
 
@@ -102,7 +159,8 @@ class BleManager(
             val name = device.name ?: result.scanRecord?.deviceName ?: ""
 
             if (name == deviceName) {
-                bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
+                stopScanInternal()
+                isConnecting = true
                 listener.onBleStatus("BLE: device found, connecting...")
                 bluetoothGatt = device.connectGatt(context, false, gattCallback)
             }
@@ -113,21 +171,64 @@ class BleManager(
 
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                listener.onBleStatus("BLE: connected")
-                gatt.discoverServices()
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                isConnecting = false
                 commandCharacteristic = null
                 notifyQueue.clear()
+
+                try {
+                    gatt.close()
+                } catch (_: Exception) {
+                }
+
+                if (bluetoothGatt === gatt) {
+                    bluetoothGatt = null
+                }
+
                 listener.onBleStatus("BLE: disconnected")
+                scheduleReconnect()
+                return
+            }
+
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                isConnecting = false
+                listener.onBleStatus("BLE: connected")
+                gatt.discoverServices()
+
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                isConnecting = false
+                commandCharacteristic = null
+                notifyQueue.clear()
+
+                try {
+                    gatt.close()
+                } catch (_: Exception) {
+                }
+
+                if (bluetoothGatt === gatt) {
+                    bluetoothGatt = null
+                }
+
+                listener.onBleStatus("BLE: disconnected")
+
+                if (!manualDisconnect) {
+                    scheduleReconnect()
+                }
             }
         }
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                listener.onBleStatus("BLE: service discovery failed")
+                gatt.disconnect()
+                return
+            }
+
             val service = gatt.getService(serviceUuid)
             if (service == null) {
                 listener.onBleStatus("BLE: service not found")
+                gatt.disconnect()
                 return
             }
 
@@ -168,6 +269,7 @@ class BleManager(
                 }
             } else {
                 listener.onBleStatus("BLE: descriptor write failed")
+                gatt.disconnect()
             }
         }
 
@@ -207,12 +309,14 @@ class BleManager(
         val ok = gatt.setCharacteristicNotification(characteristic, true)
         if (!ok) {
             listener.onBleStatus("BLE: setNotification failed")
+            gatt.disconnect()
             return
         }
 
         val descriptor = characteristic.getDescriptor(cccdUuid)
         if (descriptor == null) {
             listener.onBleStatus("BLE: CCCD not found")
+            gatt.disconnect()
             return
         }
 
