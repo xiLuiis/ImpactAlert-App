@@ -105,7 +105,10 @@ object EmergencyContactsStore {
             .map { it.phoneNumber }
     }
 
+    /**
+     * 🔥 FIX: Ahora permitimos el símbolo '+' para soporte internacional real.
+     */
     fun normalizePhone(raw: String): String {
-        return raw.filter { it.isDigit() }
+        return raw.filter { it.isDigit() || it == '+' }.trim()
     }
 }

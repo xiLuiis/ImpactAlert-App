@@ -1,46 +1,60 @@
 package com.tuapp.sosbiker
 
 import android.Manifest
+import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
+import android.telephony.SmsManager
 import android.util.Log
 import android.view.View
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import kotlin.math.abs
 import kotlin.math.sqrt
-import android.widget.CheckBox
-import android.widget.CompoundButton
 import java.net.URLEncoder
+import kotlin.math.max
 
 class MainActivity : AppCompatActivity(), BleManager.Listener {
 
     private lateinit var bleManager: BleManager
 
     private lateinit var btnTabHome: Button
+    private lateinit var btnTabSettings: Button
     private lateinit var btnTabBle: Button
-    private lateinit var homePage: LinearLayout
-    private lateinit var blePage: ScrollView
+    
+    private lateinit var homeScroll: ScrollView
+    private lateinit var settingsScroll: ScrollView
+    private lateinit var bleScroll: ScrollView
+    
     private lateinit var chkDebugMode: CheckBox
+    private lateinit var switchSmsEnabled: SwitchCompat
+    private lateinit var switchIncludeLocation: SwitchCompat
+    private lateinit var radioGroupSensitivity: RadioGroup
 
     private lateinit var txtMcuStatus: TextView
     private lateinit var txtCountdown: TextView
+    private lateinit var txtMechanismStatus: TextView
     private lateinit var txtBleStatus: TextView
+    private lateinit var txtSmsLog: TextView
     private lateinit var txtAcc: TextView
     private lateinit var txtGyro: TextView
     private lateinit var txtAccMag: TextView
@@ -53,8 +67,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private lateinit var btnTestAlert: Button
     private lateinit var btnEmergencyContacts: Button
 
-    private var latestAccText: String = ""
-    private var latestGyroText: String = ""
+    private lateinit var prefs: SharedPreferences
 
     private var accMag = 0.0
     private var gyroMag = 0.0
@@ -62,7 +75,6 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private var lastGyroMag = 0.0
 
     private var emergencyActive = false
-    private var collisionHits = 0
     private var countdownTimer: CountDownTimer? = null
     private var bleConnected = false
     private var bleSubscribed = false
@@ -79,37 +91,51 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private var stateStartMs = 0L
     private var stillnessStartMs = 0L
 
-    // ===== Thresholds =====
-    private val impactThreshold = 6.5
-    private val deltaAccThreshold = 2.5
-    private val deltaGyroThreshold = 220.0
-    private val minAccForRotationEvent = 3.5
+    private var impactThreshold = 6.5 
+    private val stillnessRequiredMs = 1800L
+    private val eventWindowMs = 1000L
+    private val postEventWindowMs = 5000L
+    private var lastEmergencyMs = 0L
+    private val emergencyCooldownMs = 6000L
 
     private val stillAccMin = 0.90
     private val stillAccMax = 1.10
     private val stillGyroThreshold = 10.0
-    private val stillnessRequiredMs = 1800L
-
-    private val eventWindowMs = 1000L
-    private val postEventWindowMs = 5000L
-
-    private var lastEmergencyMs = 0L
-    private val emergencyCooldownMs = 6000L
-
-    private var peakAccMag = 0.0
-    private var peakGyroMag = 0.0
+    private val deltaGyroThreshold = 220.0
+    private val minAccForRotationEvent = 3.5
+    private val deltaAccThreshold = 2.5
 
     companion object {
         var emergencyActiveGlobal = false
-        var collisionHitsGlobal = 0
         var cancelEmergencyFromNotification = false
+        const val EXTRA_NAVIGATE_HOME = "NAVIGATE_TO_HOME"
+        const val SMS_SENT_ACTION = "com.tuapp.sosbiker.SMS_SENT"
     }
 
     private val emergencyChannelId = "emergency_channel_v2"
-    private val crashDetectedNotificationId = 1001
     private val countdownNotificationId = 1002
+    
+    private val uiRefreshReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (cancelEmergencyFromNotification) {
+                cancelEmergencyFromNotification = false
+                cancelEmergency()
+            }
+        }
+    }
+
+    private val smsStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val status = when (resultCode) {
+                Activity.RESULT_OK -> "SUCCESS"
+                else -> "ERROR"
+            }
+            runOnUiThread { txtSmsLog.text = "SMS Status: $status" }
+        }
+    }
+
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
             startBleAutoConnect()
         }
 
@@ -118,192 +144,153 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         setContentView(R.layout.activity_main)
 
         bleManager = BleManager(this, this)
+        prefs = getSharedPreferences("SOSBikerPrefs", MODE_PRIVATE)
 
         btnTabHome = findViewById(R.id.btnTabHome)
+        btnTabSettings = findViewById(R.id.btnTabSettings)
         btnTabBle = findViewById(R.id.btnTabBle)
-        homePage = findViewById(R.id.homePage)
-        blePage = findViewById(R.id.blePage)
+        homeScroll = findViewById(R.id.homeScroll)
+        settingsScroll = findViewById(R.id.settingsScroll)
+        bleScroll = findViewById(R.id.bleScroll)
+        
         chkDebugMode = findViewById(R.id.chkDebugMode)
-
+        switchSmsEnabled = findViewById(R.id.switchSmsEnabled)
+        switchIncludeLocation = findViewById(R.id.switchIncludeLocation)
+        radioGroupSensitivity = findViewById(R.id.radioGroupSensitivity)
+        
         txtMcuStatus = findViewById(R.id.txtMcuStatus)
         txtCountdown = findViewById(R.id.txtCountdown)
+        txtMechanismStatus = findViewById(R.id.txtMechanismStatus)
+        txtSmsLog = findViewById(R.id.txtSmsLog)
         txtBleStatus = findViewById(R.id.txtBleStatus)
         txtAcc = findViewById(R.id.txtAcc)
         txtGyro = findViewById(R.id.txtGyro)
         txtAccMag = findViewById(R.id.txtAccMag)
         txtGyroMag = findViewById(R.id.txtGyroMag)
         txtCrashState = findViewById(R.id.txtCrashState)
-
+        
         btnMain = findViewById(R.id.btnMain)
         btnConnectBle = findViewById(R.id.btnConnectBle)
         btnEmergency = findViewById(R.id.btnEmergency)
         btnTestAlert = findViewById(R.id.btnTestAlert)
         btnEmergencyContacts = findViewById(R.id.btnEmergencyContacts)
 
+        switchSmsEnabled.isChecked = prefs.getBoolean("sms_enabled", true)
+        switchSmsEnabled.setOnCheckedChangeListener { _, isChecked -> prefs.edit().putBoolean("sms_enabled", isChecked).apply() }
+        
+        switchIncludeLocation.isChecked = prefs.getBoolean("location_enabled", true)
+        switchIncludeLocation.setOnCheckedChangeListener { _, isChecked -> prefs.edit().putBoolean("location_enabled", isChecked).apply() }
+
+        loadSensitivityProfile()
+        radioGroupSensitivity.setOnCheckedChangeListener { _, checkedId -> saveSensitivityProfile(checkedId) }
+
         showHome()
-
         btnTabHome.setOnClickListener { showHome() }
+        btnTabSettings.setOnClickListener { showSettings() }
+        btnTabBle.setOnClickListener { showBle() }
 
-        btnTabBle.setOnClickListener {
-            if (debugModeEnabled) {
-                showBle()
-            } else {
-                Toast.makeText(this, "Enable DEBUG mode first", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        chkDebugMode.setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean ->
+        chkDebugMode.setOnCheckedChangeListener { _, isChecked ->
             debugModeEnabled = isChecked
-            updateDebugUIVisibility()
-
-            if (!debugModeEnabled && blePage.visibility == View.VISIBLE) {
-                showHome()
-            }
+            btnTabBle.visibility = if (isChecked) View.VISIBLE else View.GONE
+            if (!isChecked && bleScroll.visibility == View.VISIBLE) showHome()
         }
 
-        btnConnectBle.setOnClickListener {
-            requestBlePermissionsAndAutoConnect()
-        }
-
-        btnTestAlert.setOnClickListener {
-            triggerEmergencyTest()
-        }
-
-        btnEmergencyContacts.setOnClickListener {
-            openEmergencyContacts()
-        }
-
-        btnMain.setOnClickListener {
-            if (emergencyActive) {
-                cancelEmergency()
-            }
-        }
-
-        btnEmergency.setOnClickListener {
-            val intent = Intent(Intent.ACTION_DIAL).apply {
-                data = Uri.parse("tel:911")
-            }
-            startActivity(intent)
-        }
+        btnConnectBle.setOnClickListener { requestPermissionsAndAutoConnect() }
+        btnTestAlert.setOnClickListener { triggerEmergencyTest() }
+        btnEmergencyContacts.setOnClickListener { openEmergencyContacts() }
+        btnMain.setOnClickListener { if (emergencyActive) cancelEmergency() }
+        btnEmergency.setOnClickListener { startActivity(Intent(Intent.ACTION_DIAL).apply { data = Uri.parse("tel:911") }) }
 
         updateMainButton()
         updateTestAlertButton()
-        updateDebugUIVisibility()
         createEmergencyChannel()
-        requestNotificationPermissionIfNeeded()
+        requestPermissionsAndAutoConnect()
 
-        // AUTO CONNECT AL ABRIR
-        requestBlePermissionsAndAutoConnect()
+        val filterUI = IntentFilter("com.tuapp.sosbiker.REFRESH_UI")
+        val filterSMS = IntentFilter(SMS_SENT_ACTION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(uiRefreshReceiver, filterUI, RECEIVER_NOT_EXPORTED)
+            registerReceiver(smsStatusReceiver, filterSMS, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(uiRefreshReceiver, filterUI)
+            registerReceiver(smsStatusReceiver, filterSMS)
+        }
+    }
+
+    private fun loadSensitivityProfile() {
+        val selectedId = prefs.getInt("sensitivity_id", R.id.radioMedium)
+        radioGroupSensitivity.check(selectedId)
+        applySensitivity(selectedId)
+    }
+
+    private fun saveSensitivityProfile(checkedId: Int) {
+        prefs.edit().putInt("sensitivity_id", checkedId).apply()
+        applySensitivity(checkedId)
+    }
+
+    private fun applySensitivity(checkedId: Int) {
+        impactThreshold = when (checkedId) {
+            R.id.radioHigh -> 4.5
+            R.id.radioLow -> 8.5
+            else -> 6.5
+        }
     }
 
     private fun showHome() {
-        homePage.visibility = View.VISIBLE
-        blePage.visibility = View.GONE
+        homeScroll.visibility = View.VISIBLE
+        settingsScroll.visibility = View.GONE
+        bleScroll.visibility = View.GONE
+    }
+
+    private fun showSettings() {
+        homeScroll.visibility = View.GONE
+        settingsScroll.visibility = View.VISIBLE
+        bleScroll.visibility = View.GONE
     }
 
     private fun showBle() {
-        homePage.visibility = View.GONE
-        blePage.visibility = View.VISIBLE
-    }
-
-    private fun updateDebugUIVisibility() {
-        btnTabBle.visibility = if (debugModeEnabled) View.VISIBLE else View.GONE
-        btnTestAlert.visibility = if (debugModeEnabled) View.VISIBLE else View.GONE
-    }
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (
-                ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2001)
-            }
-        }
+        homeScroll.visibility = View.GONE
+        settingsScroll.visibility = View.GONE
+        bleScroll.visibility = View.VISIBLE
     }
 
     private fun createEmergencyChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                emergencyChannelId,
-                "Emergency Alerts",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Crash and emergency countdown alerts"
+            val channel = NotificationChannel(emergencyChannelId, "Emergency Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Crash alerts"
                 enableVibration(true)
+                setBypassDnd(true)
+                lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
             }
-
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    private fun requestBlePermissionsAndAutoConnect() {
+    private fun requestPermissionsAndAutoConnect() {
+        val permissions = mutableListOf<String>()
+        permissions.add(Manifest.permission.SEND_SMS)
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val needed = mutableListOf<String>()
-
-            if (
-                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                needed.add(Manifest.permission.BLUETOOTH_SCAN)
-            }
-
-            if (
-                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                needed.add(Manifest.permission.BLUETOOTH_CONNECT)
-            }
-
-            if (needed.isNotEmpty()) {
-                permissionLauncher.launch(needed.toTypedArray())
-            } else {
-                startBleAutoConnect()
-            }
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         } else {
-            if (
-                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
-            } else {
-                startBleAutoConnect()
-            }
+            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        val toRequest = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (toRequest.isNotEmpty()) permissionLauncher.launch(toRequest.toTypedArray())
+        else startBleAutoConnect()
     }
-
-    private fun startBleAutoConnect() {
-        bleManager.startAutoConnect()
-    }
+    
+    private fun startBleAutoConnect() { bleManager.startAutoConnect() }
 
     override fun onBleStatus(text: String) {
         runOnUiThread {
-            txtBleStatus.text = text
-
-            bleConnected = text.contains("connected", ignoreCase = true) ||
-                    text.contains("subscribed", ignoreCase = true)
-
+            txtBleStatus.text = "BLE Status: $text"
+            bleConnected = text.contains("connected", ignoreCase = true) || text.contains("subscribed", ignoreCase = true)
             bleSubscribed = text.contains("subscribed", ignoreCase = true)
-
-            txtMcuStatus.text = when {
-                text.contains("scanning", ignoreCase = true) -> "MCU Status: Scanning..."
-                text.contains("device found, connecting", ignoreCase = true) ||
-                        text.contains("connecting", ignoreCase = true) -> "MCU Status: Connecting..."
-                bleConnected -> "MCU Status: Connected"
-                else -> "MCU Status: Offline"
-            }
-
-            if (!bleConnected) {
-                bleSubscribed = false
-                collisionHits = 0
-
-                if (!emergencyActive) {
-                    resetCrashState("Crash state: BLE OFFLINE")
-                }
-            }
-
+            txtMcuStatus.text = if (bleConnected) "MCU Status: Connected" else "MCU Status: Offline"
             updateMainButton()
             updateTestAlertButton()
         }
@@ -311,27 +298,17 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
 
     override fun onStatusValue(text: String) {
         runOnUiThread {
-            // Aquí mostramos el estado que reporta el micro SIN pisar el estado general de MCU/BLE
-            txtBleStatus.text = "BLE: MCU -> $text"
-
-            if (
-                text.contains("IMU_OK", ignoreCase = true) ||
-                text.contains("CONNECTED", ignoreCase = true)
-            ) {
+            if (text.contains("IMU_OK", ignoreCase = true) || text.contains("CONNECTED", ignoreCase = true)) {
                 bleConnected = true
                 updateMainButton()
-                updateTestAlertButton()
             }
         }
     }
 
     override fun onAccValue(text: String) {
-        latestAccText = text
         val triple = parseTriple(text) ?: return
-
         lastAccMag = accMag
         accMag = magnitude(triple.first, triple.second, triple.third)
-
         runOnUiThread {
             txtAcc.text = "ACC: $text"
             txtAccMag.text = "ACC MAG: %.2f".format(accMag)
@@ -340,12 +317,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     }
 
     override fun onGyroValue(text: String) {
-        latestGyroText = text
         val triple = parseTriple(text) ?: return
-
         lastGyroMag = gyroMag
         gyroMag = magnitude(triple.first, triple.second, triple.third)
-
         runOnUiThread {
             txtGyro.text = "GYRO: $text"
             txtGyroMag.text = "GYRO MAG: %.2f".format(gyroMag)
@@ -353,416 +327,166 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         }
     }
 
-    private fun showCrashDetectedNotification() {
-        val openIntent = Intent(this, MainActivity::class.java)
-        val openPendingIntent = PendingIntent.getActivity(
-            this,
-            10,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val cancelIntent = Intent(this, EmergencyActionReceiver::class.java).apply {
-            action = "com.tuapp.sosbiker.ACTION_CANCEL_EMERGENCY"
-        }
-
-        val cancelPendingIntent = PendingIntent.getBroadcast(
-            this,
-            11,
-            cancelIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(this, emergencyChannelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("Crash detected")
-            .setContentText("Possible accident detected. Emergency sequence started.")
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .setContentIntent(openPendingIntent)
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Cancel",
-                cancelPendingIntent
-            )
-            .build()
-
-        if (
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            NotificationManagerCompat.from(this)
-                .notify(crashDetectedNotificationId, notification)
-        }
-    }
-
     private fun showEmergencyNotification(secondsLeft: Int) {
-        val openIntent = Intent(this, MainActivity::class.java)
-        val openPendingIntent = PendingIntent.getActivity(
-            this,
-            20,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val cancelIntent = Intent(this, EmergencyActionReceiver::class.java).apply {
-            action = "com.tuapp.sosbiker.ACTION_CANCEL_EMERGENCY"
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_NAVIGATE_HOME, true)
         }
-
-        val cancelPendingIntent = PendingIntent.getBroadcast(
-            this,
-            21,
-            cancelIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val openPI = PendingIntent.getActivity(this, 20, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val cancelIntent = Intent(this, EmergencyActionReceiver::class.java).apply { action = "com.tuapp.sosbiker.ACTION_CANCEL_EMERGENCY" }
+        val cancelPI = PendingIntent.getBroadcast(this, 21, cancelIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val notification = NotificationCompat.Builder(this, emergencyChannelId)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("Emergency countdown")
-            .setContentText("Calling in $secondsLeft... False alarm?")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setContentTitle("¡CHOQUE DETECTADO!")
+            .setContentText("Activando mecanismo de auxilio en $secondsLeft seg.")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
-            .setAutoCancel(false)
             .setOnlyAlertOnce(true)
-            .setContentIntent(openPendingIntent)
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Cancel",
-                cancelPendingIntent
-            )
+            .setContentIntent(openPI)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "CANCELAR", cancelPI)
             .build()
 
-        if (
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            NotificationManagerCompat.from(this)
-                .notify(countdownNotificationId, notification)
-        }
+        NotificationManagerCompat.from(this).notify(countdownNotificationId, notification)
     }
 
-    private fun debugCrash(message: String) {
-        Log.d("SOS_BIKER_CRASH", message)
-    }
-
-    private fun setCrashState(newState: CrashState, reason: String) {
-        if (crashStateMachine != newState) {
-            debugCrash("${crashStateMachine.name} -> ${newState.name} | $reason")
-            crashStateMachine = newState
-            stateStartMs = System.currentTimeMillis()
-        }
-    }
-
-    private fun resetCrashState(uiText: String = "Crash state: NORMAL") {
-        if (crashStateMachine != CrashState.NORMAL) {
-            debugCrash("${crashStateMachine.name} -> NORMAL | reset")
-        }
+    private fun resetCrashState() {
         crashStateMachine = CrashState.NORMAL
         stateStartMs = 0L
         stillnessStartMs = 0L
-        peakAccMag = 0.0
-        peakGyroMag = 0.0
-        txtCrashState.text = uiText
+        txtCrashState.text = "State: NORMAL"
+        txtMechanismStatus.text = "Sistema de monitoreo activo"
     }
 
     private fun evaluateCrash() {
-        if (emergencyActive) return
-        if (!bleConnected || !bleSubscribed) return
-
+        if (emergencyActive || !bleConnected || !bleSubscribed) return
         val now = System.currentTimeMillis()
-
-        if (now - lastEmergencyMs < emergencyCooldownMs) {
-            return
-        }
-
-        val deltaAccMag = abs(accMag - lastAccMag)
-        val deltaGyroMag = abs(gyroMag - lastGyroMag)
-
-        peakAccMag = maxOf(peakAccMag, accMag)
-        peakGyroMag = maxOf(peakGyroMag, gyroMag)
+        if (now - lastEmergencyMs < emergencyCooldownMs) return
 
         val isStillNow = accMag in stillAccMin..stillAccMax && gyroMag <= stillGyroThreshold
-
-        if (isStillNow) {
-            if (stillnessStartMs == 0L) {
-                stillnessStartMs = now
-            }
-        } else {
-            stillnessStartMs = 0L
-        }
-
+        if (isStillNow) { if (stillnessStartMs == 0L) stillnessStartMs = now } else { stillnessStartMs = 0L }
         val stillnessDuration = if (stillnessStartMs == 0L) 0L else now - stillnessStartMs
-        val sustainedStillness = stillnessDuration >= stillnessRequiredMs
-
-        val debugText = "State: ${crashStateMachine.name}\n" +
-                "acc=%.2f dAcc=%.2f\ngyro=%.2f dGyro=%.2f\npeakAcc=%.2f peakGyro=%.2f\nstillMs=%d"
-                    .format(accMag, deltaAccMag, gyroMag, deltaGyroMag, peakAccMag, peakGyroMag, stillnessDuration)
-
-        txtCrashState.text = debugText
-        debugCrash(
-            "state=${crashStateMachine.name} acc=%.2f dAcc=%.2f gyro=%.2f dGyro=%.2f peakAcc=%.2f peakGyro=%.2f stillMs=%d"
-                .format(accMag, deltaAccMag, gyroMag, deltaGyroMag, peakAccMag, peakGyroMag, stillnessDuration)
-        )
 
         when (crashStateMachine) {
             CrashState.NORMAL -> {
-                val strongImpact = accMag >= impactThreshold
-                val rotationWithImpact = deltaGyroMag >= deltaGyroThreshold &&
-                        (accMag >= minAccForRotationEvent || deltaAccMag >= deltaAccThreshold)
-
-                if (strongImpact || rotationWithImpact) {
-                    setCrashState(
-                        CrashState.EVENT_DETECTED,
-                        "event detected | acc=%.2f dAcc=%.2f gyro=%.2f dGyro=%.2f"
-                            .format(accMag, deltaAccMag, gyroMag, deltaGyroMag)
-                    )
-                    return
+                val deltaAccMag = abs(accMag - lastAccMag)
+                val deltaGyroMag = abs(gyroMag - lastGyroMag)
+                if (accMag >= impactThreshold || (deltaGyroMag >= deltaGyroThreshold && (accMag >= minAccForRotationEvent || deltaAccMag >= deltaAccThreshold))) {
+                    crashStateMachine = CrashState.EVENT_DETECTED
+                    stateStartMs = now
                 }
             }
-
-            CrashState.EVENT_DETECTED -> {
-                val elapsed = now - stateStartMs
-
-                if (elapsed > eventWindowMs) {
-                    setCrashState(
-                        CrashState.WAITING_FOR_STILLNESS,
-                        "waiting for stillness | peakAcc=%.2f peakGyro=%.2f"
-                            .format(peakAccMag, peakGyroMag)
-                    )
-                    return
-                }
-            }
-
+            CrashState.EVENT_DETECTED -> { if (now - stateStartMs > eventWindowMs) { crashStateMachine = CrashState.WAITING_FOR_STILLNESS; stateStartMs = now } }
             CrashState.WAITING_FOR_STILLNESS -> {
-                val elapsed = now - stateStartMs
-
-                if (sustainedStillness) {
-                    setCrashState(
-                        CrashState.CONFIRMED,
-                        "confirmed by sustained stillness | peakAcc=%.2f peakGyro=%.2f stillMs=%d"
-                            .format(peakAccMag, peakGyroMag, stillnessDuration)
-                    )
-
-                    lastEmergencyMs = now
-                    collisionHits++
-                    collisionHitsGlobal = collisionHits
+                if (stillnessDuration >= stillnessRequiredMs) {
+                    crashStateMachine = CrashState.CONFIRMED
                     triggerEmergency()
-                    return
-                }
-
-                if (elapsed > postEventWindowMs) {
-                    resetCrashState("Crash state: NORMAL")
-                }
+                } else if (now - stateStartMs > postEventWindowMs) { resetCrashState() }
             }
-
-            CrashState.CONFIRMED -> {
-                txtCrashState.text = "Crash state: EMERGENCY"
-            }
+            else -> {}
         }
     }
 
     private fun triggerEmergency() {
         emergencyActive = true
         emergencyActiveGlobal = true
-        txtCrashState.text = "Crash state: EMERGENCY"
-        txtMcuStatus.text = "MCU Status: Emergency Active"
+        txtMechanismStatus.text = "Activando mecanismo de auxilio..."
         updateMainButton()
-        updateTestAlertButton()
-
-        val alertSent = bleManager.sendCommand("ALERT_ON")
-        debugCrash("ALERT_ON sent to hardware = $alertSent")
-
-        if (!alertSent) {
-            Toast.makeText(
-                this,
-                "No se pudo enviar ALERT_ON al micro",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
-
-        showCrashDetectedNotification()
+        bleManager.sendCommand("ALERT_ON")
 
         countdownTimer?.cancel()
         countdownTimer = object : CountDownTimer(8000, 1000) {
             override fun onTick(millisUntilFinished: Long) {
                 val sec = (millisUntilFinished / 1000L).toInt()
-                txtCountdown.text = "Calling in $sec..."
+                txtCountdown.text = "$sec"
                 showEmergencyNotification(sec)
-
-                if (cancelEmergencyFromNotification) {
-                    cancelEmergencyFromNotification = false
-                    cancelEmergency()
-                }
+                if (cancelEmergencyFromNotification) { cancelEmergencyFromNotification = false; cancelEmergency() }
             }
-
             override fun onFinish() {
-                txtCountdown.text = "Opening WhatsApp..."
-                NotificationManagerCompat.from(this@MainActivity)
-                    .cancel(countdownNotificationId)
-
-                sendWhatsappAlertToAllContacts()
+                if (!emergencyActive) return
+                txtMechanismStatus.text = "Mecanismo de auxilio activado"
+                txtCountdown.text = "OK"
+                sendEmergencySmsToAllContacts()
+                NotificationManagerCompat.from(this@MainActivity).cancel(countdownNotificationId)
             }
         }.start()
     }
 
-    private fun triggerEmergencyTest() {
-        showBle()
+    private fun triggerEmergencyTest() { if (bleConnected && bleSubscribed) triggerEmergency() }
+    private fun openEmergencyContacts() { startActivity(Intent(this, EmergencyContactsActivity::class.java)) }
 
-        if (!bleConnected || !bleSubscribed) {
-            Toast.makeText(
-                this,
-                "Test alert unavailable: BLE not connected/subscribed yet",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
+    private fun sendEmergencySmsToAllContacts() {
+        val enabled = prefs.getBoolean("sms_enabled", true)
+        if (!enabled) return
+        val rawNumbers = EmergencyContactsStore.getEnabledPhoneNumbers(this)
+        if (rawNumbers.isEmpty()) return
 
-        if (emergencyActive) {
-            Toast.makeText(this, "Emergency already active", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        Toast.makeText(this, "DEBUG: manual emergency trigger", Toast.LENGTH_SHORT).show()
-
-        // Para pruebas manuales, no queremos que el cooldown estorbe
-        lastEmergencyMs = 0L
-
-        collisionHits++
-        collisionHitsGlobal = collisionHits
-
-        triggerEmergency()
-    }
-
-    private fun openEmergencyContacts() {
-        val intent = Intent(this, EmergencyContactsActivity::class.java)
-        startActivity(intent)
-    }
-
-    private fun getEmergencyPhoneNumbers(): List<String> {
-        return EmergencyContactsStore.getEnabledPhoneNumbers(this)
-    }
-
-    private fun debugShowRegisteredContacts() {
-        val numbers = getEmergencyPhoneNumbers()
-
-        if (numbers.isEmpty()) {
-            Toast.makeText(this, "No emergency contacts registered", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Contacts: ${numbers.joinToString()}", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun sendWhatsappAlertToAllContacts() {
-        val numbers = EmergencyContactsStore.getEnabledPhoneNumbers(this)
-
-        if (numbers.isEmpty()) {
-            Toast.makeText(this, "No emergency contacts registered", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val message = buildEmergencyWhatsappMessage()
-
-        // Por ahora abrimos solo el primer contacto (limitación de WhatsApp)
-        openWhatsappWithMessage(numbers.first(), message)
-    }
-
-    private fun buildEmergencyWhatsappMessage(): String {
-        return """
-        🚨 SOS Biker Alert
-        
-        Se detectó una posible caída o accidente.
-        Necesito ayuda.
-        
-        Estado: emergencia confirmada
-    """.trimIndent()
-    }
-
-    private fun openWhatsappWithMessage(phoneNumber: String, message: String) {
-        try {
-            val encodedMessage = URLEncoder.encode(message, "UTF-8")
-            val uri = Uri.parse("https://wa.me/$phoneNumber?text=$encodedMessage")
-
-            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                setPackage("com.whatsapp")
+        val includeLocation = prefs.getBoolean("location_enabled", true)
+        if (includeLocation && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                val fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+                fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                    .addOnSuccessListener { location: Location? ->
+                        if (location != null) {
+                            val locStr = " Ubicación: https://www.google.com/maps?q=${location.latitude},${location.longitude}"
+                            performSmsSend(rawNumbers, "🚨 SOS Biker: Posible accidente detectado. Necesito ayuda.$locStr")
+                        } else {
+                            performSmsSend(rawNumbers, "🚨 SOS Biker: Posible accidente detectado. Necesito ayuda.")
+                        }
+                    }
+            } catch (e: Exception) {
+                performSmsSend(rawNumbers, "🚨 SOS Biker: Posible accidente detectado. Necesito ayuda.")
             }
-
-            startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(
-                this,
-                "WhatsApp no está disponible",
-                Toast.LENGTH_SHORT
-            ).show()
+        } else {
+            performSmsSend(rawNumbers, "🚨 SOS Biker: Posible accidente detectado. Necesito ayuda.")
         }
+    }
+
+    private fun performSmsSend(rawNumbers: List<String>, message: String) {
+        try {
+            val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) this.getSystemService(SmsManager::class.java) else SmsManager.getDefault()
+            val parts = smsManager.divideMessage(message)
+            val sentPI = PendingIntent.getBroadcast(this, 100, Intent(SMS_SENT_ACTION), PendingIntent.FLAG_IMMUTABLE)
+            val sentIntents = ArrayList<PendingIntent>()
+            for (i in 0 until parts.size) sentIntents.add(sentPI)
+
+            for (rawNum in rawNumbers) {
+                var number = rawNum.replace(Regex("[^0-9+]"), "")
+                if (!number.startsWith("+")) {
+                    if (number.length == 10) number = "+52$number"
+                    else if (number.startsWith("52")) number = "+$number"
+                }
+                smsManager.sendMultipartTextMessage(number, null, parts, sentIntents, null)
+            }
+        } catch (e: Exception) { Log.e("SOSBIKER", "SMS Send failed", e) }
     }
 
     private fun cancelEmergency() {
-        val alertOffSent = bleManager.sendCommand("ALERT_OFF")
-        debugCrash("ALERT_OFF sent to hardware = $alertOffSent")
-
+        bleManager.sendCommand("ALERT_OFF")
         emergencyActive = false
         emergencyActiveGlobal = false
-        collisionHits = 0
-        collisionHitsGlobal = 0
         countdownTimer?.cancel()
         countdownTimer = null
         txtCountdown.text = ""
-
-        resetCrashState("Crash state: NORMAL")
-
-        NotificationManagerCompat.from(this).cancel(crashDetectedNotificationId)
-        NotificationManagerCompat.from(this).cancel(countdownNotificationId)
-
-        txtMcuStatus.text = if (bleConnected) {
-            "MCU Status: Connected"
-        } else {
-            "MCU Status: Offline"
-        }
-
+        resetCrashState()
+        NotificationManagerCompat.from(this).cancelAll()
         updateMainButton()
-        updateTestAlertButton()
+        showHome()
     }
 
     private fun updateMainButton() {
-        when {
-            emergencyActive -> {
-                btnMain.text = "CANCEL EMERGENCY"
-                btnMain.isEnabled = true
-                btnMain.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    android.graphics.Color.parseColor("#D93D33")
-                )
-            }
-
-            !bleConnected -> {
-                btnMain.text = "BLE OFFLINE"
-                btnMain.isEnabled = false
-                btnMain.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    android.graphics.Color.parseColor("#9E9E9E")
-                )
-            }
-
-            else -> {
-                btnMain.text = "SYSTEM NORMAL"
-                btnMain.isEnabled = false
-                btnMain.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    android.graphics.Color.parseColor("#2ECC71")
-                )
+        runOnUiThread {
+            when {
+                emergencyActive -> { btnMain.text = "CANCEL EMERGENCY"; btnMain.backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#D93D33")) }
+                !bleConnected -> { btnMain.text = "BLE OFFLINE"; btnMain.backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#9E9E9E")) }
+                else -> { btnMain.text = "SYSTEM NORMAL"; btnMain.backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#2ECC71")) }
             }
         }
     }
 
     private fun updateTestAlertButton() {
         val enabled = bleConnected && bleSubscribed && !emergencyActive
-
         btnTestAlert.isEnabled = enabled
         btnTestAlert.alpha = if (enabled) 1.0f else 0.5f
     }
@@ -770,24 +494,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private fun parseTriple(text: String): Triple<Double, Double, Double>? {
         val parts = text.split(",")
         if (parts.size != 3) return null
-
-        return try {
-            Triple(
-                parts[0].trim().toDouble(),
-                parts[1].trim().toDouble(),
-                parts[2].trim().toDouble()
-            )
-        } catch (_: Exception) {
-            null
-        }
+        return try { Triple(parts[0].trim().toDouble(), parts[1].trim().toDouble(), parts[2].trim().toDouble()) } catch (_: Exception) { null }
     }
 
-    private fun magnitude(x: Double, y: Double, z: Double): Double {
-        return sqrt(x * x + y * y + z * z)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        bleManager.disconnect()
-    }
+    private fun magnitude(x: Double, y: Double, z: Double): Double = sqrt(x * x + y * y + z * z)
 }

@@ -8,14 +8,18 @@ import androidx.core.app.NotificationManagerCompat
 class EmergencyActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            "com.tuapp.sosbiker.ACTION_CANCEL_EMERGENCY" -> {
-                MainActivity.emergencyActiveGlobal = false
-                MainActivity.collisionHitsGlobal = 0
-                MainActivity.cancelEmergencyFromNotification = true
+        if (intent.action == "com.tuapp.sosbiker.ACTION_CANCEL_EMERGENCY") {
+            // Marcamos la bandera global
+            MainActivity.cancelEmergencyFromNotification = true
+            
+            // Intentamos avisar a la actividad de forma inmediata si está viva
+            val updateIntent = Intent("com.tuapp.sosbiker.REFRESH_UI")
+            context.sendBroadcast(updateIntent)
 
-                NotificationManagerCompat.from(context).cancel(1001)
-            }
+            // Cancelamos AMBAS notificaciones (la de choque y la de cuenta atrás)
+            val nm = NotificationManagerCompat.from(context)
+            nm.cancel(1001) // crashDetectedNotificationId
+            nm.cancel(1002) // countdownNotificationId
         }
     }
 }
