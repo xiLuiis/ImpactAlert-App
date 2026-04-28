@@ -1,4 +1,4 @@
-# ImpactAlert-App
+# Sos-Biker
 
 Sistema IoT para detección de impactos y asistencia en emergencias, orientado a motociclistas y usuarios de vehículos personales.
 
