@@ -97,6 +97,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private val postEventWindowMs = 5000L
     private var lastEmergencyMs = 0L
     private val emergencyCooldownMs = 6000L
+    private var lastCancelMs = 0L
 
     private val stillAccMin = 0.90
     private val stillAccMax = 1.10
@@ -127,8 +128,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private val smsStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val status = when (resultCode) {
-                Activity.RESULT_OK -> "SUCCESS"
-                else -> "ERROR"
+                Activity.RESULT_OK -> "SUCCESS (Enviado)"
+                else -> "ERROR (Fallo)"
             }
             runOnUiThread { txtSmsLog.text = "SMS Status: $status" }
         }
@@ -288,9 +289,17 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     override fun onBleStatus(text: String) {
         runOnUiThread {
             txtBleStatus.text = "BLE Status: $text"
-            bleConnected = text.contains("connected", ignoreCase = true) || text.contains("subscribed", ignoreCase = true)
-            bleSubscribed = text.contains("subscribed", ignoreCase = true)
-            txtMcuStatus.text = if (bleConnected) "MCU Status: Connected" else "MCU Status: Offline"
+            bleConnected = text == "BLE: connected" || text == "BLE: subscribed"
+            bleSubscribed = text == "BLE: subscribed"
+            
+            if (!bleConnected) {
+                txtMcuStatus.text = "MCU Status: Offline"
+                txtCrashState.text = "State: OFFLINE"
+            } else {
+                txtMcuStatus.text = "MCU Status: Connected"
+                if (crashStateMachine == CrashState.NORMAL) txtCrashState.text = "State: NORMAL"
+            }
+            
             updateMainButton()
             updateTestAlertButton()
         }
@@ -298,9 +307,33 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
 
     override fun onStatusValue(text: String) {
         runOnUiThread {
-            if (text.contains("IMU_OK", ignoreCase = true) || text.contains("CONNECTED", ignoreCase = true)) {
-                bleConnected = true
-                updateMainButton()
+            val now = System.currentTimeMillis()
+            val upperText = text.uppercase()
+            when {
+                upperText.contains("EMERGENCY_ACTIVE") -> {
+                    txtMcuStatus.text = "MCU Status: EMERGENCY ACTIVE"
+                    // Sincronizar estado visual si el micro ya está en emergencia
+                    if (crashStateMachine != CrashState.CONFIRMED) {
+                        crashStateMachine = CrashState.CONFIRMED
+                        txtCrashState.text = "State: CONFIRMED"
+                    }
+                    
+                    if (!emergencyActive && (now - lastCancelMs > 3000)) {
+                        triggerEmergency("microcontrolador")
+                    }
+                }
+                upperText.contains("IMU_OK") -> {
+                    txtMcuStatus.text = "MCU Status: Connected"
+                    if (!emergencyActive) {
+                        txtMechanismStatus.text = "Sistema de monitoreo activo"
+                        // NO llamamos a resetCrashState aquí porque el mensaje periódico del Arduino
+                        // interrumpía la lógica de detección de la App.
+                    }
+                    updateMainButton()
+                }
+                upperText.contains("IMU_FAIL") -> {
+                    txtMcuStatus.text = "MCU Status: SENSOR FAIL"
+                }
             }
         }
     }
@@ -375,12 +408,20 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 if (accMag >= impactThreshold || (deltaGyroMag >= deltaGyroThreshold && (accMag >= minAccForRotationEvent || deltaAccMag >= deltaAccThreshold))) {
                     crashStateMachine = CrashState.EVENT_DETECTED
                     stateStartMs = now
+                    txtCrashState.text = "State: EVENT_DETECTED"
                 }
             }
-            CrashState.EVENT_DETECTED -> { if (now - stateStartMs > eventWindowMs) { crashStateMachine = CrashState.WAITING_FOR_STILLNESS; stateStartMs = now } }
+            CrashState.EVENT_DETECTED -> { 
+                if (now - stateStartMs > eventWindowMs) { 
+                    crashStateMachine = CrashState.WAITING_FOR_STILLNESS
+                    stateStartMs = now 
+                    txtCrashState.text = "State: WAITING_FOR_STILLNESS"
+                } 
+            }
             CrashState.WAITING_FOR_STILLNESS -> {
                 if (stillnessDuration >= stillnessRequiredMs) {
                     crashStateMachine = CrashState.CONFIRMED
+                    txtCrashState.text = "State: CONFIRMED"
                     triggerEmergency()
                 } else if (now - stateStartMs > postEventWindowMs) { resetCrashState() }
             }
@@ -388,11 +429,19 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         }
     }
 
-    private fun triggerEmergency() {
+    private fun triggerEmergency(source: String = "app") {
+        if (emergencyActive) return
         emergencyActive = true
         emergencyActiveGlobal = true
-        txtMechanismStatus.text = "Activando mecanismo de auxilio..."
-        updateMainButton()
+
+        // Sincronizar estado visual
+        crashStateMachine = CrashState.CONFIRMED
+        runOnUiThread {
+            txtCrashState.text = "State: CONFIRMED"
+            txtMechanismStatus.text = if (source == "microcontrolador") "Emergencia detectada por dispositivo" else "Activando mecanismo de auxilio..."
+            updateMainButton()
+        }
+
         bleManager.sendCommand("ALERT_ON")
 
         countdownTimer?.cancel()
@@ -418,9 +467,17 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
 
     private fun sendEmergencySmsToAllContacts() {
         val enabled = prefs.getBoolean("sms_enabled", true)
-        if (!enabled) return
+        if (!enabled) {
+            runOnUiThread { txtSmsLog.text = "SMS Status: Deshabilitado en ajustes" }
+            return
+        }
         val rawNumbers = EmergencyContactsStore.getEnabledPhoneNumbers(this)
-        if (rawNumbers.isEmpty()) return
+        if (rawNumbers.isEmpty()) {
+            runOnUiThread { txtSmsLog.text = "SMS Status: Sin contactos habilitados" }
+            return
+        }
+
+        runOnUiThread { txtSmsLog.text = "SMS Status: Enviando a ${rawNumbers.size} contactos..." }
 
         val includeLocation = prefs.getBoolean("location_enabled", true)
         if (includeLocation && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
@@ -463,12 +520,14 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     }
 
     private fun cancelEmergency() {
+        lastCancelMs = System.currentTimeMillis()
         bleManager.sendCommand("ALERT_OFF")
         emergencyActive = false
         emergencyActiveGlobal = false
         countdownTimer?.cancel()
         countdownTimer = null
         txtCountdown.text = ""
+        txtSmsLog.text = "SMS Status: Alerta cancelada"
         resetCrashState()
         NotificationManagerCompat.from(this).cancelAll()
         updateMainButton()
