@@ -4,6 +4,7 @@
 #include "LSM6DS3.h"
 #include <math.h>
 #include <string.h>
+#include <DFRobotDFPlayerMini.h>
 
 #define ENABLE_VOICE_ML 0
 
@@ -12,76 +13,66 @@
 #include "Edgar9206-project-1_inferencing.h"
 #endif
 
-#include <DFRobotDFPlayerMini.h>
-
-// =====================================================
-// BLE
-// =====================================================
-
 static const char* BLE_NAME = "SOS_Biker_XIAO";
 
-BLEService imuService("19B10000-E8F2-537E-4F6C-D104768A1214");
+static const int CANCEL_BUTTON_PIN = 2;
+static const uint32_t BUTTON_DEBOUNCE_MS = 40;
+static const uint32_t EMERGENCY_COOLDOWN_MS = 7000;
 
-BLECharacteristic statusChar("19B10001-E8F2-537E-4F6C-D104768A1214");
-BLECharacteristic accChar   ("19B10002-E8F2-537E-4F6C-D104768A1214");
-BLECharacteristic gyroChar  ("19B10003-E8F2-537E-4F6C-D104768A1214");
+static const float HELP_THRESHOLD = 0.25f;
+static const uint8_t HELP_MIN_HITS = 1;
+
+BLEService imuService("19B10000-E8F2-537E-4F6C-D104768A1214");
+BLECharacteristic statusChar ("19B10001-E8F2-537E-4F6C-D104768A1214");
+BLECharacteristic accChar    ("19B10002-E8F2-537E-4F6C-D104768A1214");
+BLECharacteristic gyroChar   ("19B10003-E8F2-537E-4F6C-D104768A1214");
 BLECharacteristic commandChar("19B10004-E8F2-537E-4F6C-D104768A1214");
 
-// =====================================================
-// IMU
-// =====================================================
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
+DFRobotDFPlayerMini dfPlayer;
 
 bool imuOk = false;
 bool bleConnected = false;
+bool localAlertActive = false;
+bool dfPlayerOk = false;
+bool mlReady = false;
 
-// Timers
 uint32_t lastSensorRead = 0;
 uint32_t lastBleAccSend = 0;
 uint32_t lastBleGyroSend = 0;
 uint32_t lastStatusMsg = 0;
 uint32_t lastDebugMsg = 0;
+uint32_t lastEmergencyTime = 0;
 
-// Raw data
-float ax = 0, ay = 0, az = 0;
-float gx = 0, gy = 0, gz = 0;
+bool lastButtonReading = HIGH;
+uint32_t lastButtonDebounceMs = 0;
 
-// Magnitudes
+float ax = 0.0f, ay = 0.0f, az = 0.0f;
+float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+
 float accMag = 0.0f;
 float gyroMag = 0.0f;
 float lastAccMag = 0.0f;
 float lastGyroMag = 0.0f;
 float deltaAccMag = 0.0f;
 float deltaGyroMag = 0.0f;
-
-// Peaks
 float peakAccMag = 0.0f;
 float peakGyroMag = 0.0f;
 
-// =====================================================
-// ALERTA LOCAL
-// =====================================================
-bool localAlertActive = false;
-uint32_t lastEmergencyTime = 0;
-const uint32_t EMERGENCY_COOLDOWN_MS = 7000;
+const float IMPACT_THRESHOLD = 8.0f;
+const float DELTA_ACC_THRESHOLD = 3.5f;
+const float DELTA_GYRO_THRESHOLD = 350.0f;
+const float MIN_ACC_FOR_ROTATION_EVENT = 5.0f;
+const float STILL_ACC_MIN = 0.95f;
+const float STILL_ACC_MAX = 1.08f;
+const float STILL_GYRO_THRESHOLD = 8.0f;
+const uint32_t STILLNESS_REQUIRED_MS = 2500;
+const uint32_t EVENT_WINDOW_MS = 1200;
+const uint32_t POST_EVENT_WINDOW_MS = 6000;
 
-// =====================================================
-// BOTON CANCELAR
-// =====================================================
-static const int CANCEL_BUTTON_PIN = 2;
-static const uint32_t BUTTON_DEBOUNCE_MS = 40;
-bool lastButtonReading = HIGH;
-uint32_t lastButtonDebounceMs = 0;
+uint32_t stateStartMs = 0;
+uint32_t stillnessStartMs = 0;
 
-// =====================================================
-// DFPLAYER
-// =====================================================
-DFRobotDFPlayerMini dfPlayer;
-bool dfPlayerOk = false;
-
-// =====================================================
-// DETECCION DE CAIDA
-// =====================================================
 enum CrashState {
   STATE_NORMAL,
   STATE_EVENT_DETECTED,
@@ -90,34 +81,8 @@ enum CrashState {
 };
 
 CrashState crashState = STATE_NORMAL;
-uint32_t stateStartMs = 0;
-uint32_t stillnessStartMs = 0;
 
-const float IMPACT_THRESHOLD = 8.0f;
-const float DELTA_ACC_THRESHOLD = 3.5f;
-const float DELTA_GYRO_THRESHOLD = 350.0f;
-const float MIN_ACC_FOR_ROTATION_EVENT = 5.0f;
-
-const float STILL_ACC_MIN = 0.95f;
-const float STILL_ACC_MAX = 1.08f;
-const float STILL_GYRO_THRESHOLD = 8.0f;
-const uint32_t STILLNESS_REQUIRED_MS = 2500;
-
-const uint32_t EVENT_WINDOW_MS = 1200;
-const uint32_t POST_EVENT_WINDOW_MS = 6000;
-
-// =====================================================
-// EDGE IMPULSE / MICROFONO
-// =====================================================
 #if ENABLE_VOICE_ML
-static const float HELP_THRESHOLD = 0.25f;
-static const uint8_t HELP_MIN_HITS = 1;
-
-bool mlReady = false;
-float lastHelpScore = 0.0f;
-uint8_t helpHits = 0;
-static bool debug_nn = false;
-
 typedef struct {
   int16_t *buffer;
   volatile uint8_t buf_ready;
@@ -127,12 +92,11 @@ typedef struct {
 
 static inference_t inference;
 static signed short sampleBuffer[2048];
-
+static bool debug_nn = false;
+float lastHelpScore = 0.0f;
+uint8_t helpHits = 0;
 #endif
 
-// =====================================================
-// HELPERS
-// =====================================================
 const char* stateToString(CrashState s) {
   switch (s) {
     case STATE_NORMAL: return "NORMAL";
@@ -143,55 +107,36 @@ const char* stateToString(CrashState s) {
   }
 }
 
+void writeNotify(BLECharacteristic& chr, const char* msg) {
+  chr.write((const uint8_t*)msg, strlen(msg));
+  if (bleConnected) chr.notify((const uint8_t*)msg, strlen(msg));
+}
+
+void updateBleState() {
+  if (!imuOk) {
+    writeNotify(statusChar, "IMU_FAIL");
+  } else if (localAlertActive) {
+    writeNotify(statusChar, "EMERGENCY_ACTIVE");
+  } else {
+    writeNotify(statusChar, "IMU_OK");
+  }
+}
+
 void playMp3Track(uint16_t trackNumber) {
-  if (!dfPlayerOk) return;
+  if (!dfPlayerOk) {
+    Serial.println("[AUD] DFPlayer not available");
+    return;
+  }
+
   dfPlayer.playMp3Folder(trackNumber);
+  Serial.print("[AUD] Play track ");
+  Serial.println(trackNumber);
 }
 
 void stopAudio() {
   if (!dfPlayerOk) return;
   dfPlayer.stop();
-}
-
-void triggerLocalAlert() {
-  if (localAlertActive) return;
-
-  localAlertActive = true;
-  crashState = STATE_CONFIRMED;
-  lastEmergencyTime = millis();
-
-  Serial.println(">>> LOCAL ALERT ON <<<");
-  Serial.println(">>> Aqui activarias buzzer/LED <<<");
-
-  playMp3Track(11);
-
-  statusChar.write((const uint8_t*)"EMERGENCY_ACTIVE", strlen("EMERGENCY_ACTIVE"));
-  if (bleConnected) {
-    statusChar.notify((const uint8_t*)"EMERGENCY_ACTIVE", strlen("EMERGENCY_ACTIVE"));
-  }
-}
-
-void clearLocalAlert() {
-  if (!localAlertActive && crashState == STATE_NORMAL) return;
-
-  localAlertActive = false;
-  stopAudio();
-
-  Serial.println(">>> LOCAL ALERT OFF <<<");
-}
-
-void setCrashState(CrashState newState, const char* reason) {
-  if (crashState != newState) {
-    Serial.print("[STATE] ");
-    Serial.print(stateToString(crashState));
-    Serial.print(" -> ");
-    Serial.print(stateToString(newState));
-    Serial.print(" | ");
-    Serial.println(reason);
-
-    crashState = newState;
-    stateStartMs = millis();
-  }
+  Serial.println("[AUD] Stop");
 }
 
 void resetCrashState() {
@@ -206,6 +151,58 @@ void resetCrashState() {
   stillnessStartMs = 0;
   peakAccMag = 0.0f;
   peakGyroMag = 0.0f;
+}
+
+void triggerLocalAlert() {
+  if (localAlertActive) return;
+
+  localAlertActive = true;
+  lastEmergencyTime = millis();
+  crashState = STATE_CONFIRMED;
+
+  Serial.println(">>> EMERGENCY ACTIVE <<<");
+  playMp3Track(11);
+  updateBleState();
+}
+
+void clearLocalAlert() {
+  if (!localAlertActive && crashState == STATE_NORMAL) return;
+
+  localAlertActive = false;
+  stopAudio();
+  resetCrashState();
+
+  Serial.println(">>> LOCAL ALERT OFF <<<");
+  updateBleState();
+}
+
+void connect_callback(uint16_t conn_handle) {
+  (void)conn_handle;
+  bleConnected = true;
+  Serial.println("[BLE] Connected");
+  updateBleState();
+}
+
+void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
+  (void)conn_handle;
+  (void)reason;
+  bleConnected = false;
+  Serial.println("[BLE] Disconnected");
+  Bluefruit.Advertising.start(0);
+}
+
+void setCrashState(CrashState newState, const char* reason) {
+  if (crashState == newState) return;
+
+  Serial.print("[STATE] ");
+  Serial.print(stateToString(crashState));
+  Serial.print(" -> ");
+  Serial.print(stateToString(newState));
+  Serial.print(" | ");
+  Serial.println(reason);
+
+  crashState = newState;
+  stateStartMs = millis();
 }
 
 void updateMagnitudes() {
@@ -223,19 +220,19 @@ void updateMagnitudes() {
 }
 
 bool isStillNow() {
-  return (
-    accMag >= STILL_ACC_MIN &&
-    accMag <= STILL_ACC_MAX &&
-    gyroMag <= STILL_GYRO_THRESHOLD
-  );
+  return accMag >= STILL_ACC_MIN &&
+         accMag <= STILL_ACC_MAX &&
+         gyroMag <= STILL_GYRO_THRESHOLD;
 }
 
-// =====================================================
-// CAIDA LOCAL
-// =====================================================
 void evaluateLocalCrash() {
-  if (millis() - lastEmergencyTime < EMERGENCY_COOLDOWN_MS) return;
+  if (bleConnected) {
+    if (!localAlertActive) resetCrashState();
+    return;
+  }
+
   if (localAlertActive) return;
+  if (millis() - lastEmergencyTime < EMERGENCY_COOLDOWN_MS) return;
 
   bool stillNow = isStillNow();
 
@@ -251,7 +248,6 @@ void evaluateLocalCrash() {
   switch (crashState) {
     case STATE_NORMAL: {
       bool strongImpact = accMag >= IMPACT_THRESHOLD;
-
       bool rotationWithImpact =
         deltaGyroMag >= DELTA_GYRO_THRESHOLD &&
         accMag >= MIN_ACC_FOR_ROTATION_EVENT &&
@@ -267,10 +263,8 @@ void evaluateLocalCrash() {
       break;
     }
 
-    case STATE_EVENT_DETECTED: {
-      uint32_t elapsed = millis() - stateStartMs;
-
-      if (elapsed > EVENT_WINDOW_MS) {
+    case STATE_EVENT_DETECTED:
+      if ((millis() - stateStartMs) > EVENT_WINDOW_MS) {
         char reason[120];
         snprintf(reason, sizeof(reason),
                  "wait stillness | peakAcc=%.2f peakGyro=%.2f",
@@ -278,7 +272,6 @@ void evaluateLocalCrash() {
         setCrashState(STATE_WAITING_FOR_STILLNESS, reason);
       }
       break;
-    }
 
     case STATE_WAITING_FOR_STILLNESS: {
       uint32_t elapsed = millis() - stateStartMs;
@@ -290,9 +283,7 @@ void evaluateLocalCrash() {
                  peakAccMag, peakGyroMag, (unsigned long)stillnessDuration);
         setCrashState(STATE_CONFIRMED, reason);
         triggerLocalAlert();
-      }
-
-      if (elapsed > POST_EVENT_WINDOW_MS) {
+      } else if (elapsed > POST_EVENT_WINDOW_MS) {
         resetCrashState();
       }
       break;
@@ -303,75 +294,50 @@ void evaluateLocalCrash() {
   }
 }
 
-// =====================================================
-// BLE CALLBACKS BLUEFRUIT
-// =====================================================
-void connect_callback(uint16_t conn_handle) {
-  (void)conn_handle;
-  bleConnected = true;
-  Serial.println("Central connected");
-
-  const char* msg = localAlertActive ? "EMERGENCY_ACTIVE" : "CONNECTED";
-  statusChar.write((const uint8_t*)msg, strlen(msg));
-  statusChar.notify((const uint8_t*)msg, strlen(msg));
-}
-
-void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
-  (void)conn_handle;
-  (void)reason;
-  bleConnected = false;
-  Serial.println("Central disconnected -> advertising again");
-}
-
-void command_write_callback(uint16_t conn_hdl, BLECharacteristic* chr, uint8_t* data, uint16_t len) {
+void handleBleCommand(uint16_t conn_hdl, BLECharacteristic* chr, uint8_t* data, uint16_t len) {
   (void)conn_hdl;
   (void)chr;
 
   if (len == 0) return;
-  if (len > 20) len = 20;
 
-  char cmdBuffer[21];
-  memcpy(cmdBuffer, data, len);
-  cmdBuffer[len] = '\0';
+  char cmd[32];
+  uint16_t copyLen = (len < sizeof(cmd) - 1) ? len : (sizeof(cmd) - 1);
+  memcpy(cmd, data, copyLen);
+  cmd[copyLen] = '\0';
 
   Serial.print("BLE COMMAND RECEIVED: ");
-  Serial.println(cmdBuffer);
+  Serial.println(cmd);
 
-  if (strcmp(cmdBuffer, "ALERT_ON") == 0 ||
-      strcmp(cmdBuffer, "HELP") == 0 ||
-      strcmp(cmdBuffer, "VOICE") == 0 ||
-      strcmp(cmdBuffer, "FALL") == 0) {
+  if (strcmp(cmd, "ALERT_ON") == 0 || strcmp(cmd, "HELP") == 0 || strcmp(cmd, "VOICE") == 0 || strcmp(cmd, "FALL") == 0) {
     triggerLocalAlert();
-  } else if (strcmp(cmdBuffer, "ALERT_OFF") == 0 ||
-             strcmp(cmdBuffer, "CANCEL") == 0 ||
-             strcmp(cmdBuffer, "STOP") == 0 ||
-             strcmp(cmdBuffer, "NORMAL") == 0) {
+  } else if (strcmp(cmd, "ALERT_OFF") == 0 || strcmp(cmd, "CANCEL") == 0 || strcmp(cmd, "STOP") == 0 || strcmp(cmd, "NORMAL") == 0) {
     clearLocalAlert();
-    resetCrashState();
   }
 }
 
-void writeStatus() {
-  const char* msg = "NORMAL";
+void taskCancelButton() {
+  bool reading = digitalRead(CANCEL_BUTTON_PIN);
 
-  if (!imuOk) {
-    msg = "IMU_FAIL";
-  } else if (localAlertActive) {
-    msg = "EMERGENCY_ACTIVE";
-  } else if (crashState == STATE_EVENT_DETECTED || crashState == STATE_WAITING_FOR_STILLNESS) {
-    msg = "CRASH_MONITORING";
-  } else {
-    msg = "IMU_OK";
+  if (reading != lastButtonReading) {
+    lastButtonDebounceMs = millis();
+    lastButtonReading = reading;
   }
 
-  statusChar.write((const uint8_t*)msg, strlen(msg));
-  if (bleConnected) statusChar.notify((const uint8_t*)msg, strlen(msg));
+  if ((millis() - lastButtonDebounceMs) > BUTTON_DEBOUNCE_MS) {
+    static bool stableState = HIGH;
+
+    if (reading != stableState) {
+      stableState = reading;
+
+      if (stableState == LOW) {
+        Serial.println("[BTN] Cancel button pressed");
+        clearLocalAlert();
+      }
+    }
+  }
 }
 
 #if ENABLE_VOICE_ML
-// =====================================================
-// MICROFONO / EDGE IMPULSE
-// =====================================================
 int getHelpIndex() {
   for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
     if (strcmp(ei_classifier_inferencing_categories[i], "ayuda") == 0 ||
@@ -430,28 +396,21 @@ static int microphone_audio_signal_get_data(size_t offset, size_t length, float 
 }
 
 bool initML() {
-  Serial.println("[ML] Init microphone inference");
-
   if (!microphone_inference_start(EI_CLASSIFIER_RAW_SAMPLE_COUNT)) {
     Serial.println("[ML] MIC FAIL");
     return false;
   }
 
   int helpIndex = getHelpIndex();
-  if (helpIndex < 0) {
-    Serial.println("[ML] Etiqueta ayuda/help no encontrada");
-  } else {
-    Serial.print("[ML] helpIndex=");
-    Serial.println(helpIndex);
-  }
+  if (helpIndex < 0) Serial.println("[ML] ayuda/help label not found");
+  else Serial.println("[ML] MIC OK");
 
-  Serial.println("[ML] MIC OK");
   return true;
 }
 
 void taskVoiceML() {
   if (!mlReady) return;
-  if (localAlertActive || crashState != STATE_NORMAL) return;
+  if (localAlertActive) return;
   if (inference.buf_ready == 0) return;
 
   signal_t signal;
@@ -459,11 +418,9 @@ void taskVoiceML() {
   signal.get_data = &microphone_audio_signal_get_data;
 
   ei_impulse_result_t result = { 0 };
-
   EI_IMPULSE_ERROR r = run_classifier(&signal, &result, debug_nn);
+
   if (r != EI_IMPULSE_OK) {
-    Serial.print("[ML] ERR classifier=");
-    Serial.println((int)r);
     inference.buf_ready = 0;
     inference.buf_count = 0;
     return;
@@ -479,13 +436,6 @@ void taskVoiceML() {
       if (result.classification[i].value > maxOther) maxOther = result.classification[i].value;
     }
 
-    lastHelpScore = ayudaScore;
-
-    Serial.print("[ML] AYUDA=");
-    Serial.print(ayudaScore, 5);
-    Serial.print(" OTHER_MAX=");
-    Serial.println(maxOther, 5);
-
     if (ayudaScore >= HELP_THRESHOLD && ayudaScore > maxOther) {
       if (helpHits < 255) helpHits++;
     } else {
@@ -493,7 +443,7 @@ void taskVoiceML() {
     }
 
     if (helpHits >= HELP_MIN_HITS) {
-      Serial.println("[ML] AYUDA DETECTADA");
+      Serial.println("[ML] HELP DETECTED");
       triggerLocalAlert();
       helpHits = 0;
     }
@@ -502,12 +452,15 @@ void taskVoiceML() {
   inference.buf_ready = 0;
   inference.buf_count = 0;
 }
+#else
+bool initML() {
+  Serial.println("[ML] MIC DISABLED");
+  return false;
+}
 
+void taskVoiceML() {}
 #endif
 
-// =====================================================
-// INIT
-// =====================================================
 void initIMU() {
   Wire.begin();
 
@@ -537,32 +490,32 @@ void initBLE() {
 
   accChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
   accChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  accChar.setMaxLen(20);
+  accChar.setMaxLen(24);
   accChar.begin();
 
   gyroChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
   gyroChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  gyroChar.setMaxLen(20);
+  gyroChar.setMaxLen(24);
   gyroChar.begin();
 
   commandChar.setProperties(CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
   commandChar.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   commandChar.setMaxLen(20);
-  commandChar.setWriteCallback(command_write_callback);
+  commandChar.setWriteCallback(handleBleCommand);
   commandChar.begin();
 
-  writeStatus();
+  updateBleState();
 
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
   Bluefruit.Advertising.addService(imuService);
   Bluefruit.ScanResponse.addName();
-
   Bluefruit.Advertising.restartOnDisconnect(true);
   Bluefruit.Advertising.setInterval(32, 244);
   Bluefruit.Advertising.setFastTimeout(30);
   Bluefruit.Advertising.start(0);
 
+  Serial.println("BLE begin OK");
   Serial.print("Advertising as: ");
   Serial.println(BLE_NAME);
 }
@@ -571,45 +524,98 @@ void initDFPlayer() {
   Serial1.begin(9600);
   delay(1500);
 
-  Serial.println("[AUD] Inicializando DFPlayer...");
-
   if (dfPlayer.begin(Serial1, true, true)) {
     dfPlayerOk = true;
     dfPlayer.volume(30);
     dfPlayer.outputDevice(DFPLAYER_DEVICE_SD);
-    Serial.println("[AUD] DFPLAYER OK");
+    Serial.println("DFPLAYER OK");
   } else {
     dfPlayerOk = false;
-    Serial.println("[AUD] DFPLAYER FAIL");
+    Serial.println("DFPLAYER FAIL");
   }
 }
 
-void taskCancelButton() {
-  bool reading = digitalRead(CANCEL_BUTTON_PIN);
+void taskIMURead() {
+  if (!imuOk) return;
+  if (millis() - lastSensorRead < 20) return;
 
-  if (reading != lastButtonReading) {
-    lastButtonDebounceMs = millis();
-    lastButtonReading = reading;
+  lastSensorRead = millis();
+
+  ax = myIMU.readFloatAccelX();
+  ay = myIMU.readFloatAccelY();
+  az = myIMU.readFloatAccelZ();
+
+  gx = myIMU.readFloatGyroX();
+  gy = myIMU.readFloatGyroY();
+  gz = myIMU.readFloatGyroZ();
+
+  updateMagnitudes();
+  evaluateLocalCrash();
+}
+
+void taskBLESend() {
+  if (!bleConnected || !imuOk) return;
+
+  if (millis() - lastBleAccSend >= 100) {
+    lastBleAccSend = millis();
+    char accMsg[24];
+    snprintf(accMsg, sizeof(accMsg), "%.2f,%.2f,%.2f", ax, ay, az);
+    writeNotify(accChar, accMsg);
   }
 
-  if ((millis() - lastButtonDebounceMs) > BUTTON_DEBOUNCE_MS) {
-    static bool stableState = HIGH;
+  if (millis() - lastBleGyroSend >= 100) {
+    lastBleGyroSend = millis();
+    char gyroMsg[24];
+    snprintf(gyroMsg, sizeof(gyroMsg), "%.2f,%.2f,%.2f", gx, gy, gz);
+    writeNotify(gyroChar, gyroMsg);
+  }
 
-    if (reading != stableState) {
-      stableState = reading;
-
-      if (stableState == LOW) {
-        Serial.println("[BTN] Cancel button pressed");
-        clearLocalAlert();
-        resetCrashState();
-      }
-    }
+  if (millis() - lastStatusMsg >= 300) {
+    lastStatusMsg = millis();
+    updateBleState();
   }
 }
 
-// =====================================================
-// SETUP
-// =====================================================
+void taskDebugLog() {
+  if (millis() - lastDebugMsg < 500) return;
+  lastDebugMsg = millis();
+
+  Serial.print("[DBG] state=");
+  Serial.print(stateToString(crashState));
+  Serial.print(" | accNow=");
+  Serial.print(accMag, 2);
+  Serial.print(" | accPeak=");
+  Serial.print(peakAccMag, 2);
+  Serial.print(" | dAcc=");
+  Serial.print(deltaAccMag, 2);
+  Serial.print(" | gyroNow=");
+  Serial.print(gyroMag, 2);
+  Serial.print(" | gyroPeak=");
+  Serial.print(peakGyroMag, 2);
+  Serial.print(" | dGyro=");
+  Serial.print(deltaGyroMag, 2);
+  Serial.print(" | still=");
+  Serial.print(isStillNow() ? "true" : "false");
+  Serial.print(" | alert=");
+  Serial.print(localAlertActive ? "true" : "false");
+  Serial.print(" | ble=");
+  Serial.println(bleConnected ? "true" : "false");
+}
+
+void taskSerialCommands() {
+  if (!Serial.available()) return;
+
+  char c = Serial.read();
+
+  if (c == '1') triggerLocalAlert();
+  else if (c == '0' || c == 'c' || c == 'C') clearLocalAlert();
+  else if (c == 'p' || c == 'P') playMp3Track(1);
+  else if (c == 'f' || c == 'F') triggerLocalAlert();
+  else if (c == 'd' || c == 'D') playMp3Track(10);
+  else if (c == 'n' || c == 'N') playMp3Track(9);
+  else if (c == 'u' || c == 'U') playMp3Track(12);
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -623,116 +629,16 @@ void setup() {
   initIMU();
   initBLE();
   initDFPlayer();
-#if ENABLE_VOICE_ML
   mlReady = initML();
-#endif
-
-  Serial.println("System ready");
 }
 
-// =====================================================
-// LOOP
-// =====================================================
 void loop() {
-  if (imuOk && millis() - lastSensorRead >= 20) {
-    lastSensorRead = millis();
-
-    ax = myIMU.readFloatAccelX();
-    ay = myIMU.readFloatAccelY();
-    az = myIMU.readFloatAccelZ();
-
-    gx = myIMU.readFloatGyroX();
-    gy = myIMU.readFloatGyroY();
-    gz = myIMU.readFloatGyroZ();
-
-    updateMagnitudes();
-    evaluateLocalCrash();
-  }
-
-  if (bleConnected && millis() - lastBleAccSend >= 100) {
-    lastBleAccSend = millis();
-
-    char accMsg[20];
-    snprintf(accMsg, sizeof(accMsg), "%.2f,%.2f,%.2f", ax, ay, az);
-
-    accChar.write((const uint8_t*)accMsg, strlen(accMsg));
-    accChar.notify((const uint8_t*)accMsg, strlen(accMsg));
-  }
-
-  if (bleConnected && millis() - lastBleGyroSend >= 100) {
-    lastBleGyroSend = millis();
-
-    char gyroMsg[20];
-    snprintf(gyroMsg, sizeof(gyroMsg), "%.2f,%.2f,%.2f", gx, gy, gz);
-
-    gyroChar.write((const uint8_t*)gyroMsg, strlen(gyroMsg));
-    gyroChar.notify((const uint8_t*)gyroMsg, strlen(gyroMsg));
-  }
-
-  if (millis() - lastStatusMsg >= 300) {
-    lastStatusMsg = millis();
-    writeStatus();
-  }
-
+  taskIMURead();
+  taskBLESend();
+  taskDebugLog();
   taskCancelButton();
-#if ENABLE_VOICE_ML
   taskVoiceML();
-#endif
-
-  if (millis() - lastDebugMsg >= 500) {
-    lastDebugMsg = millis();
-
-    Serial.print("[DBG] state=");
-    Serial.print(stateToString(crashState));
-
-    Serial.print(" | accNow=");
-    Serial.print(accMag, 2);
-
-    Serial.print(" | accPeak=");
-    Serial.print(peakAccMag, 2);
-
-    Serial.print(" | dAcc=");
-    Serial.print(deltaAccMag, 2);
-
-    Serial.print(" | gyroNow=");
-    Serial.print(gyroMag, 2);
-
-    Serial.print(" | gyroPeak=");
-    Serial.print(peakGyroMag, 2);
-
-    Serial.print(" | dGyro=");
-    Serial.print(deltaGyroMag, 2);
-
-    Serial.print(" | still=");
-    Serial.print(isStillNow() ? "true" : "false");
-
-    Serial.print(" | alert=");
-    Serial.print(localAlertActive ? "true" : "false");
-
-    Serial.print(" | ble=");
-    Serial.println(bleConnected ? "true" : "false");
-  }
-
-  if (Serial.available()) {
-    char c = Serial.read();
-
-    if (c == '1') {
-      triggerLocalAlert();
-    } else if (c == '0') {
-      clearLocalAlert();
-      resetCrashState();
-    } else if (c == 'i' || c == 'I') {
-      Serial.print("ACC: ");
-      Serial.print(ax); Serial.print(",");
-      Serial.print(ay); Serial.print(",");
-      Serial.println(az);
-
-      Serial.print("GYRO: ");
-      Serial.print(gx); Serial.print(",");
-      Serial.print(gy); Serial.print(",");
-      Serial.println(gz);
-    }
-  }
+  taskSerialCommands();
 }
 
 #if ENABLE_VOICE_ML
