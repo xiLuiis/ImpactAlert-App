@@ -322,6 +322,93 @@
                 android:textSize="18sp"
                 android:textStyle="bold"
                 android:textColor="#000000" />
+            <TextView
+                android:id="@+id/txtCalibrationValues"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Calibration: -"
+                android:textSize="12sp"
+                android:textColor="#000000"
+                android:background="#EEEEEE"
+                android:padding="10dp" />
+            <Button
+                android:id="@+id/btnImpactMinus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Impact -0.5" />
+
+            <Button
+                android:id="@+id/btnImpactPlus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Impact +0.5" />
+
+            <Button
+                android:id="@+id/btnGyroMinus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Gyro -20" />
+
+            <Button
+                android:id="@+id/btnGyroPlus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Gyro +20" />
+
+            <Button
+                android:id="@+id/btnDeltaAccMinus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Delta Acc -0.2" />
+
+            <Button
+                android:id="@+id/btnDeltaAccPlus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Delta Acc +0.2" />
+
+            <Button
+                android:id="@+id/btnStillnessMinus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Stillness -200ms" />
+
+            <Button
+                android:id="@+id/btnStillnessPlus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Stillness +200ms" />
+
+            <Button
+                android:id="@+id/btnEventWindowMinus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Event Window -100ms" />
+
+            <Button
+                android:id="@+id/btnEventWindowPlus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Event Window +100ms" />
+
+            <Button
+                android:id="@+id/btnPostEventMinus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Post Event -500ms" />
+
+            <Button
+                android:id="@+id/btnPostEventPlus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Post Event +500ms" />
+
+            <Button
+                android:id="@+id/btnResetMediumCalibration"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="RESET CURRENT PROFILE" />
         </LinearLayout>
     </ScrollView>
 
