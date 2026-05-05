@@ -30,13 +30,25 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import kotlin.math.abs
 import kotlin.math.sqrt
-import java.net.URLEncoder
-import kotlin.math.max
 
 class MainActivity : AppCompatActivity(), BleManager.Listener {
+    private lateinit var txtCalibrationValues: TextView
 
     private lateinit var bleManager: BleManager
 
+    private lateinit var btnStillnessMinus: Button
+    private lateinit var btnStillnessPlus: Button
+    private lateinit var btnEventWindowMinus: Button
+    private lateinit var btnEventWindowPlus: Button
+    private lateinit var btnPostEventMinus: Button
+    private lateinit var btnPostEventPlus: Button
+    private lateinit var btnImpactMinus: Button
+    private lateinit var btnImpactPlus: Button
+    private lateinit var btnGyroMinus: Button
+    private lateinit var btnGyroPlus: Button
+    private lateinit var btnDeltaAccMinus: Button
+    private lateinit var btnDeltaAccPlus: Button
+    private lateinit var btnResetMediumCalibration: Button
     private lateinit var btnTabHome: Button
     private lateinit var btnTabSettings: Button
     private lateinit var btnTabBle: Button
@@ -82,7 +94,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
 
     private enum class CrashState {
         NORMAL,
-        EVENT_DETECTED,
+        POSSIBLE_CRASH,
+        EVALUATING,
         WAITING_FOR_STILLNESS,
         CONFIRMED
     }
@@ -91,20 +104,20 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private var stateStartMs = 0L
     private var stillnessStartMs = 0L
 
-    private var impactThreshold = 6.5 
-    private val stillnessRequiredMs = 1800L
-    private val eventWindowMs = 1000L
-    private val postEventWindowMs = 5000L
+    private var impactThreshold = 6.5
+    private var stillnessRequiredMs = 1800L
+    private var eventWindowMs = 1000L
+    private var postEventWindowMs = 5000L
     private var lastEmergencyMs = 0L
     private val emergencyCooldownMs = 6000L
     private var lastCancelMs = 0L
 
-    private val stillAccMin = 0.90
-    private val stillAccMax = 1.10
-    private val stillGyroThreshold = 10.0
-    private val deltaGyroThreshold = 220.0
-    private val minAccForRotationEvent = 3.5
-    private val deltaAccThreshold = 2.5
+    private var stillAccMin = 0.90
+    private var stillAccMax = 1.10
+    private var stillGyroThreshold = 10.0
+    private var deltaGyroThreshold = 220.0
+    private var minAccForRotationEvent = 3.5
+    private var deltaAccThreshold = 2.5
 
     companion object {
         var emergencyActiveGlobal = false
@@ -147,6 +160,8 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         bleManager = BleManager(this, this)
         prefs = getSharedPreferences("SOSBikerPrefs", MODE_PRIVATE)
 
+        txtCalibrationValues = findViewById(R.id.txtCalibrationValues)
+
         btnTabHome = findViewById(R.id.btnTabHome)
         btnTabSettings = findViewById(R.id.btnTabSettings)
         btnTabBle = findViewById(R.id.btnTabBle)
@@ -175,6 +190,91 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         btnEmergency = findViewById(R.id.btnEmergency)
         btnTestAlert = findViewById(R.id.btnTestAlert)
         btnEmergencyContacts = findViewById(R.id.btnEmergencyContacts)
+
+        btnStillnessMinus = findViewById(R.id.btnStillnessMinus)
+        btnStillnessPlus = findViewById(R.id.btnStillnessPlus)
+        btnEventWindowMinus = findViewById(R.id.btnEventWindowMinus)
+        btnEventWindowPlus = findViewById(R.id.btnEventWindowPlus)
+        btnPostEventMinus = findViewById(R.id.btnPostEventMinus)
+        btnPostEventPlus = findViewById(R.id.btnPostEventPlus)
+
+        btnStillnessMinus.setOnClickListener {
+            stillnessRequiredMs = maxOf(200L, stillnessRequiredMs - 200L)
+            saveCurrentProfileCalibration()
+        }
+
+        btnStillnessPlus.setOnClickListener {
+            stillnessRequiredMs += 200L
+            saveCurrentProfileCalibration()
+        }
+
+        btnEventWindowMinus.setOnClickListener {
+            eventWindowMs = maxOf(100L, eventWindowMs - 100L)
+            saveCurrentProfileCalibration()
+        }
+
+        btnEventWindowPlus.setOnClickListener {
+            eventWindowMs += 100L
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostEventMinus.setOnClickListener {
+            postEventWindowMs = maxOf(500L, postEventWindowMs - 500L)
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostEventPlus.setOnClickListener {
+            postEventWindowMs += 500L
+            saveCurrentProfileCalibration()
+        }
+
+        btnImpactMinus = findViewById(R.id.btnImpactMinus)
+        btnImpactPlus = findViewById(R.id.btnImpactPlus)
+        btnGyroMinus = findViewById(R.id.btnGyroMinus)
+        btnGyroPlus = findViewById(R.id.btnGyroPlus)
+        btnDeltaAccMinus = findViewById(R.id.btnDeltaAccMinus)
+        btnDeltaAccPlus = findViewById(R.id.btnDeltaAccPlus)
+        btnResetMediumCalibration = findViewById(R.id.btnResetMediumCalibration)
+
+        btnImpactMinus.setOnClickListener {
+            impactThreshold -= 0.5
+            saveCurrentProfileCalibration()
+            updateCalibrationText()
+        }
+
+        btnImpactPlus.setOnClickListener {
+            impactThreshold += 0.5
+            saveCurrentProfileCalibration()
+            updateCalibrationText()
+        }
+
+        btnGyroMinus.setOnClickListener {
+            deltaGyroThreshold -= 20.0
+            saveCurrentProfileCalibration()
+            updateCalibrationText()
+        }
+
+        btnGyroPlus.setOnClickListener {
+            deltaGyroThreshold += 20.0
+            saveCurrentProfileCalibration()
+            updateCalibrationText()
+        }
+
+        btnDeltaAccMinus.setOnClickListener {
+            deltaAccThreshold -= 0.2
+            saveCurrentProfileCalibration()
+            updateCalibrationText()
+        }
+
+        btnDeltaAccPlus.setOnClickListener {
+            deltaAccThreshold += 0.2
+            saveCurrentProfileCalibration()
+            updateCalibrationText()
+        }
+
+        btnResetMediumCalibration.setOnClickListener {
+            resetCurrentProfileCalibration()
+        }
 
         switchSmsEnabled.isChecked = prefs.getBoolean("sms_enabled", true)
         switchSmsEnabled.setOnCheckedChangeListener { _, isChecked -> prefs.edit().putBoolean("sms_enabled", isChecked).apply() }
@@ -230,10 +330,89 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     }
 
     private fun applySensitivity(checkedId: Int) {
-        impactThreshold = when (checkedId) {
-            R.id.radioHigh -> 4.5
-            R.id.radioLow -> 8.5
-            else -> 6.5
+        val profile = when (checkedId) {
+            R.id.radioHigh -> "high"
+            R.id.radioLow -> "low"
+            else -> "medium"
+        }
+
+        loadProfileCalibration(profile)
+    }
+
+    private fun applyDefaultProfileValues(profile: String) {
+        when (profile) {
+            "high" -> {
+                impactThreshold = 4.5
+                deltaAccThreshold = 2.0
+                deltaGyroThreshold = 160.0
+                minAccForRotationEvent = 2.8
+                stillGyroThreshold = 14.0
+                stillnessRequiredMs = 1400L
+                eventWindowMs = 900L
+                postEventWindowMs = 5500L
+            }
+
+            "low" -> {
+                impactThreshold = 8.5
+                deltaAccThreshold = 3.5
+                deltaGyroThreshold = 300.0
+                minAccForRotationEvent = 4.5
+                stillGyroThreshold = 8.0
+                stillnessRequiredMs = 2200L
+                eventWindowMs = 1100L
+                postEventWindowMs = 4500L
+            }
+
+            else -> {
+                impactThreshold = 6.5
+                deltaAccThreshold = 2.5
+                deltaGyroThreshold = 220.0
+                minAccForRotationEvent = 3.5
+                stillGyroThreshold = 10.0
+                stillnessRequiredMs = 1800L
+                eventWindowMs = 1000L
+                postEventWindowMs = 5000L
+            }
+        }
+    }
+
+    private fun loadProfileCalibration(profile: String) {
+        applyDefaultProfileValues(profile)
+
+        impactThreshold = prefs.getFloat("${profile}_impactThreshold", impactThreshold.toFloat()).toDouble()
+        deltaAccThreshold = prefs.getFloat("${profile}_deltaAccThreshold", deltaAccThreshold.toFloat()).toDouble()
+        deltaGyroThreshold = prefs.getFloat("${profile}_deltaGyroThreshold", deltaGyroThreshold.toFloat()).toDouble()
+        minAccForRotationEvent = prefs.getFloat("${profile}_minAccForRotationEvent", minAccForRotationEvent.toFloat()).toDouble()
+        stillGyroThreshold = prefs.getFloat("${profile}_stillGyroThreshold", stillGyroThreshold.toFloat()).toDouble()
+        stillnessRequiredMs = prefs.getLong("${profile}_stillnessRequiredMs", stillnessRequiredMs)
+        eventWindowMs = prefs.getLong("${profile}_eventWindowMs", eventWindowMs)
+        postEventWindowMs = prefs.getLong("${profile}_postEventWindowMs", postEventWindowMs)
+
+        updateCalibrationText()
+    }
+
+    private fun saveCurrentProfileCalibration() {
+        val profile = currentProfileKey()
+
+        prefs.edit()
+            .putFloat("${profile}_impactThreshold", impactThreshold.toFloat())
+            .putFloat("${profile}_deltaAccThreshold", deltaAccThreshold.toFloat())
+            .putFloat("${profile}_deltaGyroThreshold", deltaGyroThreshold.toFloat())
+            .putFloat("${profile}_minAccForRotationEvent", minAccForRotationEvent.toFloat())
+            .putFloat("${profile}_stillGyroThreshold", stillGyroThreshold.toFloat())
+            .putLong("${profile}_stillnessRequiredMs", stillnessRequiredMs)
+            .putLong("${profile}_eventWindowMs", eventWindowMs)
+            .putLong("${profile}_postEventWindowMs", postEventWindowMs)
+            .apply()
+
+        updateCalibrationText()
+    }
+
+    private fun currentProfileKey(): String {
+        return when (radioGroupSensitivity.checkedRadioButtonId) {
+            R.id.radioHigh -> "high"
+            R.id.radioLow -> "low"
+            else -> "medium"
         }
     }
 
@@ -406,17 +585,22 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 val deltaAccMag = abs(accMag - lastAccMag)
                 val deltaGyroMag = abs(gyroMag - lastGyroMag)
                 if (accMag >= impactThreshold || (deltaGyroMag >= deltaGyroThreshold && (accMag >= minAccForRotationEvent || deltaAccMag >= deltaAccThreshold))) {
-                    crashStateMachine = CrashState.EVENT_DETECTED
+                    crashStateMachine = CrashState.POSSIBLE_CRASH
                     stateStartMs = now
-                    txtCrashState.text = "State: EVENT_DETECTED"
+                    txtCrashState.text = "State: POSSIBLE_CRASH"
                 }
             }
-            CrashState.EVENT_DETECTED -> { 
-                if (now - stateStartMs > eventWindowMs) { 
+            CrashState.POSSIBLE_CRASH -> {
+                crashStateMachine = CrashState.EVALUATING
+                txtCrashState.text = "State: EVALUATING"
+            }
+
+            CrashState.EVALUATING -> {
+                if (now - stateStartMs > eventWindowMs) {
                     crashStateMachine = CrashState.WAITING_FOR_STILLNESS
-                    stateStartMs = now 
+                    stateStartMs = now
                     txtCrashState.text = "State: WAITING_FOR_STILLNESS"
-                } 
+                }
             }
             CrashState.WAITING_FOR_STILLNESS -> {
                 if (stillnessDuration >= stillnessRequiredMs) {
@@ -556,5 +740,46 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         return try { Triple(parts[0].trim().toDouble(), parts[1].trim().toDouble(), parts[2].trim().toDouble()) } catch (_: Exception) { null }
     }
 
+    private fun updateCalibrationText() {
+        if (!::txtCalibrationValues.isInitialized) return
+
+        val profile = currentProfileKey().uppercase()
+
+        txtCalibrationValues.text =
+            """
+        $profile PROFILE CALIBRATION
+
+        Impact threshold: $impactThreshold
+        Delta Acc threshold: $deltaAccThreshold
+        Delta Gyro threshold: $deltaGyroThreshold
+        Min Acc for rotation: $minAccForRotationEvent
+        Still Gyro threshold: $stillGyroThreshold
+
+        Stillness required: ${stillnessRequiredMs}ms
+        Event window: ${eventWindowMs}ms
+        Post-event window: ${postEventWindowMs}ms
+        """.trimIndent()
+    }
+
+    private fun resetCurrentProfileCalibration() {
+        val profile = currentProfileKey()
+
+        applyDefaultProfileValues(profile)
+
+        prefs.edit()
+            .remove("${profile}_impactThreshold")
+            .remove("${profile}_deltaAccThreshold")
+            .remove("${profile}_deltaGyroThreshold")
+            .remove("${profile}_minAccForRotationEvent")
+            .remove("${profile}_stillGyroThreshold")
+            .remove("${profile}_stillnessRequiredMs")
+            .remove("${profile}_eventWindowMs")
+            .remove("${profile}_postEventWindowMs")
+            .apply()
+
+        updateCalibrationText()
+    }
     private fun magnitude(x: Double, y: Double, z: Double): Double = sqrt(x * x + y * y + z * z)
+
+
 }
