@@ -33,7 +33,17 @@ import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), BleManager.Listener {
     private lateinit var txtCalibrationValues: TextView
+    private lateinit var btnMinAccRotationMinus: Button
+    private lateinit var btnMinAccRotationPlus: Button
+    private lateinit var btnStillGyroMinus: Button
+    private lateinit var btnStillGyroPlus: Button
 
+    private lateinit var btnPostCrashAccMinus: Button
+    private lateinit var btnPostCrashAccPlus: Button
+    private lateinit var btnPostCrashGyroMinus: Button
+    private lateinit var btnPostCrashGyroPlus: Button
+    private lateinit var btnPostCrashTimeMinus: Button
+    private lateinit var btnPostCrashTimePlus: Button
     private lateinit var bleManager: BleManager
 
     private lateinit var btnStillnessMinus: Button
@@ -103,7 +113,7 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private var crashStateMachine = CrashState.NORMAL
     private var stateStartMs = 0L
     private var stillnessStartMs = 0L
-
+    private var abnormalMotionStartMs = 0L
     private var impactThreshold = 6.5
     private var stillnessRequiredMs = 1800L
     private var eventWindowMs = 1000L
@@ -118,6 +128,10 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private var deltaGyroThreshold = 220.0
     private var minAccForRotationEvent = 3.5
     private var deltaAccThreshold = 2.5
+
+    private var postCrashDeltaAccThreshold = 1.4
+    private var postCrashGyroThreshold = 90.0
+    private var postCrashMotionRequiredMs = 1000L
 
     companion object {
         var emergencyActiveGlobal = false
@@ -161,6 +175,17 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         prefs = getSharedPreferences("SOSBikerPrefs", MODE_PRIVATE)
 
         txtCalibrationValues = findViewById(R.id.txtCalibrationValues)
+        btnMinAccRotationMinus = findViewById(R.id.btnMinAccRotationMinus)
+        btnMinAccRotationPlus = findViewById(R.id.btnMinAccRotationPlus)
+        btnStillGyroMinus = findViewById(R.id.btnStillGyroMinus)
+        btnStillGyroPlus = findViewById(R.id.btnStillGyroPlus)
+
+        btnPostCrashAccMinus = findViewById(R.id.btnPostCrashAccMinus)
+        btnPostCrashAccPlus = findViewById(R.id.btnPostCrashAccPlus)
+        btnPostCrashGyroMinus = findViewById(R.id.btnPostCrashGyroMinus)
+        btnPostCrashGyroPlus = findViewById(R.id.btnPostCrashGyroPlus)
+        btnPostCrashTimeMinus = findViewById(R.id.btnPostCrashTimeMinus)
+        btnPostCrashTimePlus = findViewById(R.id.btnPostCrashTimePlus)
 
         btnTabHome = findViewById(R.id.btnTabHome)
         btnTabSettings = findViewById(R.id.btnTabSettings)
@@ -190,14 +215,19 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         btnEmergency = findViewById(R.id.btnEmergency)
         btnTestAlert = findViewById(R.id.btnTestAlert)
         btnEmergencyContacts = findViewById(R.id.btnEmergencyContacts)
-
         btnStillnessMinus = findViewById(R.id.btnStillnessMinus)
         btnStillnessPlus = findViewById(R.id.btnStillnessPlus)
         btnEventWindowMinus = findViewById(R.id.btnEventWindowMinus)
         btnEventWindowPlus = findViewById(R.id.btnEventWindowPlus)
         btnPostEventMinus = findViewById(R.id.btnPostEventMinus)
         btnPostEventPlus = findViewById(R.id.btnPostEventPlus)
-
+        btnImpactMinus = findViewById(R.id.btnImpactMinus)
+        btnImpactPlus = findViewById(R.id.btnImpactPlus)
+        btnGyroMinus = findViewById(R.id.btnGyroMinus)
+        btnGyroPlus = findViewById(R.id.btnGyroPlus)
+        btnDeltaAccMinus = findViewById(R.id.btnDeltaAccMinus)
+        btnDeltaAccPlus = findViewById(R.id.btnDeltaAccPlus)
+        btnResetMediumCalibration = findViewById(R.id.btnResetMediumCalibration)
         btnStillnessMinus.setOnClickListener {
             stillnessRequiredMs = maxOf(200L, stillnessRequiredMs - 200L)
             saveCurrentProfileCalibration()
@@ -227,15 +257,55 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             postEventWindowMs += 500L
             saveCurrentProfileCalibration()
         }
+        btnMinAccRotationMinus.setOnClickListener {
+            minAccForRotationEvent = maxOf(0.5, minAccForRotationEvent - 0.2)
+            saveCurrentProfileCalibration()
+        }
 
-        btnImpactMinus = findViewById(R.id.btnImpactMinus)
-        btnImpactPlus = findViewById(R.id.btnImpactPlus)
-        btnGyroMinus = findViewById(R.id.btnGyroMinus)
-        btnGyroPlus = findViewById(R.id.btnGyroPlus)
-        btnDeltaAccMinus = findViewById(R.id.btnDeltaAccMinus)
-        btnDeltaAccPlus = findViewById(R.id.btnDeltaAccPlus)
-        btnResetMediumCalibration = findViewById(R.id.btnResetMediumCalibration)
+        btnMinAccRotationPlus.setOnClickListener {
+            minAccForRotationEvent += 0.2
+            saveCurrentProfileCalibration()
+        }
 
+        btnStillGyroMinus.setOnClickListener {
+            stillGyroThreshold = maxOf(1.0, stillGyroThreshold - 1.0)
+            saveCurrentProfileCalibration()
+        }
+
+        btnStillGyroPlus.setOnClickListener {
+            stillGyroThreshold += 1.0
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostCrashAccMinus.setOnClickListener {
+            postCrashDeltaAccThreshold = maxOf(0.2, postCrashDeltaAccThreshold - 0.2)
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostCrashAccPlus.setOnClickListener {
+            postCrashDeltaAccThreshold += 0.2
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostCrashGyroMinus.setOnClickListener {
+            postCrashGyroThreshold = maxOf(10.0, postCrashGyroThreshold - 10.0)
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostCrashGyroPlus.setOnClickListener {
+            postCrashGyroThreshold += 10.0
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostCrashTimeMinus.setOnClickListener {
+            postCrashMotionRequiredMs = maxOf(200L, postCrashMotionRequiredMs - 200L)
+            saveCurrentProfileCalibration()
+        }
+
+        btnPostCrashTimePlus.setOnClickListener {
+            postCrashMotionRequiredMs += 200L
+            saveCurrentProfileCalibration()
+        }
         btnImpactMinus.setOnClickListener {
             impactThreshold -= 0.5
             saveCurrentProfileCalibration()
@@ -313,7 +383,10 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             registerReceiver(uiRefreshReceiver, filterUI, RECEIVER_NOT_EXPORTED)
             registerReceiver(smsStatusReceiver, filterSMS, RECEIVER_NOT_EXPORTED)
         } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(uiRefreshReceiver, filterUI)
+
+            @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(smsStatusReceiver, filterSMS)
         }
     }
@@ -350,6 +423,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 stillnessRequiredMs = 1400L
                 eventWindowMs = 900L
                 postEventWindowMs = 5500L
+                postCrashDeltaAccThreshold = 1.0
+                postCrashGyroThreshold = 70.0
+                postCrashMotionRequiredMs = 800L
             }
 
             "low" -> {
@@ -361,6 +437,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 stillnessRequiredMs = 2200L
                 eventWindowMs = 1100L
                 postEventWindowMs = 4500L
+                postCrashDeltaAccThreshold = 1.8
+                postCrashGyroThreshold = 120.0
+                postCrashMotionRequiredMs = 1200L
             }
 
             else -> {
@@ -372,6 +451,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 stillnessRequiredMs = 1800L
                 eventWindowMs = 1000L
                 postEventWindowMs = 5000L
+                postCrashDeltaAccThreshold = 1.4
+                postCrashGyroThreshold = 90.0
+                postCrashMotionRequiredMs = 1000L
             }
         }
     }
@@ -387,6 +469,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         stillnessRequiredMs = prefs.getLong("${profile}_stillnessRequiredMs", stillnessRequiredMs)
         eventWindowMs = prefs.getLong("${profile}_eventWindowMs", eventWindowMs)
         postEventWindowMs = prefs.getLong("${profile}_postEventWindowMs", postEventWindowMs)
+        postCrashDeltaAccThreshold = prefs.getFloat("${profile}_postCrashDeltaAccThreshold", postCrashDeltaAccThreshold.toFloat()).toDouble()
+        postCrashGyroThreshold = prefs.getFloat("${profile}_postCrashGyroThreshold", postCrashGyroThreshold.toFloat()).toDouble()
+        postCrashMotionRequiredMs = prefs.getLong("${profile}_postCrashMotionRequiredMs", postCrashMotionRequiredMs)
 
         updateCalibrationText()
     }
@@ -403,6 +488,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             .putLong("${profile}_stillnessRequiredMs", stillnessRequiredMs)
             .putLong("${profile}_eventWindowMs", eventWindowMs)
             .putLong("${profile}_postEventWindowMs", postEventWindowMs)
+            .putFloat("${profile}_postCrashDeltaAccThreshold", postCrashDeltaAccThreshold.toFloat())
+            .putFloat("${profile}_postCrashGyroThreshold", postCrashGyroThreshold.toFloat())
+            .putLong("${profile}_postCrashMotionRequiredMs", postCrashMotionRequiredMs)
             .apply()
 
         updateCalibrationText()
@@ -540,6 +628,13 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     }
 
     private fun showEmergencyNotification(secondsLeft: Int) {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_NAVIGATE_HOME, true)
@@ -567,29 +662,63 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
         crashStateMachine = CrashState.NORMAL
         stateStartMs = 0L
         stillnessStartMs = 0L
+        abnormalMotionStartMs = 0L
         txtCrashState.text = "State: NORMAL"
         txtMechanismStatus.text = "Sistema de monitoreo activo"
     }
 
     private fun evaluateCrash() {
         if (emergencyActive || !bleConnected || !bleSubscribed) return
+
         val now = System.currentTimeMillis()
         if (now - lastEmergencyMs < emergencyCooldownMs) return
 
+        val deltaAccMag = abs(accMag - lastAccMag)
+        val deltaGyroMag = abs(gyroMag - lastGyroMag)
+
         val isStillNow = accMag in stillAccMin..stillAccMax && gyroMag <= stillGyroThreshold
-        if (isStillNow) { if (stillnessStartMs == 0L) stillnessStartMs = now } else { stillnessStartMs = 0L }
+        if (isStillNow) {
+            if (stillnessStartMs == 0L) stillnessStartMs = now
+        } else {
+            stillnessStartMs = 0L
+        }
+
         val stillnessDuration = if (stillnessStartMs == 0L) 0L else now - stillnessStartMs
+
+        val isAbnormalPostCrashMotion =
+            deltaAccMag >= postCrashDeltaAccThreshold ||
+                    gyroMag >= postCrashGyroThreshold ||
+                    deltaGyroMag >= deltaGyroThreshold
+
+        if (
+            crashStateMachine == CrashState.WAITING_FOR_STILLNESS &&
+            isAbnormalPostCrashMotion
+        ) {
+            if (abnormalMotionStartMs == 0L) abnormalMotionStartMs = now
+        } else {
+            abnormalMotionStartMs = 0L
+        }
+
+        val abnormalMotionDuration =
+            if (abnormalMotionStartMs == 0L) 0L else now - abnormalMotionStartMs
 
         when (crashStateMachine) {
             CrashState.NORMAL -> {
-                val deltaAccMag = abs(accMag - lastAccMag)
-                val deltaGyroMag = abs(gyroMag - lastGyroMag)
-                if (accMag >= impactThreshold || (deltaGyroMag >= deltaGyroThreshold && (accMag >= minAccForRotationEvent || deltaAccMag >= deltaAccThreshold))) {
+                if (
+                    accMag >= impactThreshold ||
+                    (
+                            deltaGyroMag >= deltaGyroThreshold &&
+                                    (accMag >= minAccForRotationEvent || deltaAccMag >= deltaAccThreshold)
+                            )
+                ) {
                     crashStateMachine = CrashState.POSSIBLE_CRASH
                     stateStartMs = now
+                    stillnessStartMs = 0L
+                    abnormalMotionStartMs = 0L
                     txtCrashState.text = "State: POSSIBLE_CRASH"
                 }
             }
+
             CrashState.POSSIBLE_CRASH -> {
                 crashStateMachine = CrashState.EVALUATING
                 txtCrashState.text = "State: EVALUATING"
@@ -599,16 +728,32 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
                 if (now - stateStartMs > eventWindowMs) {
                     crashStateMachine = CrashState.WAITING_FOR_STILLNESS
                     stateStartMs = now
-                    txtCrashState.text = "State: WAITING_FOR_STILLNESS"
+                    stillnessStartMs = 0L
+                    abnormalMotionStartMs = 0L
+                    txtCrashState.text = "State: CHECKING_RESPONSE"
                 }
             }
+
             CrashState.WAITING_FOR_STILLNESS -> {
-                if (stillnessDuration >= stillnessRequiredMs) {
-                    crashStateMachine = CrashState.CONFIRMED
-                    txtCrashState.text = "State: CONFIRMED"
-                    triggerEmergency()
-                } else if (now - stateStartMs > postEventWindowMs) { resetCrashState() }
+                when {
+                    stillnessDuration >= stillnessRequiredMs -> {
+                        crashStateMachine = CrashState.CONFIRMED
+                        txtCrashState.text = "State: CONFIRMED_STILLNESS"
+                        triggerEmergency()
+                    }
+
+                    abnormalMotionDuration >= postCrashMotionRequiredMs -> {
+                        crashStateMachine = CrashState.CONFIRMED
+                        txtCrashState.text = "State: CONFIRMED_ABNORMAL_MOTION"
+                        triggerEmergency()
+                    }
+
+                    now - stateStartMs > postEventWindowMs -> {
+                        resetCrashState()
+                    }
+                }
             }
+
             else -> {}
         }
     }
@@ -743,21 +888,72 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
     private fun updateCalibrationText() {
         if (!::txtCalibrationValues.isInitialized) return
 
-        val profile = currentProfileKey().uppercase()
+        val profile = when (currentProfileKey()) {
+            "high" -> "ALTA SENSIBILIDAD"
+            "low" -> "BAJA SENSIBILIDAD"
+            else -> "MEDIA SENSIBILIDAD"
+        }
 
         txtCalibrationValues.text =
             """
-        $profile PROFILE CALIBRATION
+        PERFIL ACTIVO: $profile
 
-        Impact threshold: $impactThreshold
-        Delta Acc threshold: $deltaAccThreshold
-        Delta Gyro threshold: $deltaGyroThreshold
-        Min Acc for rotation: $minAccForRotationEvent
-        Still Gyro threshold: $stillGyroThreshold
+        DETECCIÓN INICIAL DEL CHOQUE
 
-        Stillness required: ${stillnessRequiredMs}ms
-        Event window: ${eventWindowMs}ms
-        Post-event window: ${postEventWindowMs}ms
+        1. Fuerza del golpe: $impactThreshold g
+        Botones: Golpe - / Golpe +
+        Menor = detecta golpes más suaves.
+        Mayor = necesita un golpe más fuerte.
+
+        2. Cambio brusco de movimiento: $deltaAccThreshold g
+        Botones: Cambio mov - / Cambio mov +
+        Menor = detecta frenadas, jalones o cambios rápidos más fácil.
+        Mayor = ignora cambios normales de manejo.
+
+        3. Giro brusco: $deltaGyroThreshold °/s
+        Botones: Giro - / Giro +
+        Menor = detecta caídas con giro más fácil.
+        Mayor = necesita un giro más fuerte.
+
+        4. Movimiento mínimo para validar giro: $minAccForRotationEvent g
+        Botones: Mov. para giro - / Mov. para giro +
+        Evita que solo un giro pequeño active un posible choque.
+
+        CONFIRMACIÓN POR NO MOVERSE
+
+        5. Tiempo sin movimiento: ${stillnessRequiredMs} ms
+        Botones: Quietud - / Quietud +
+        Si después del choque queda quieto este tiempo, se activa la alarma.
+
+        6. Límite para considerar quieto: $stillGyroThreshold °/s
+        Botones: Límite quieto - / Límite quieto +
+        Menor = debe estar más quieto.
+        Mayor = permite pequeños movimientos.
+
+        CONFIRMACIÓN POR MOVIMIENTO ANORMAL
+
+        7. Movimiento anormal después del choque: $postCrashDeltaAccThreshold g
+        Botones: Movimiento raro - / Movimiento raro +
+        Si después del choque sigue rodando, rebotando o moviéndose fuerte, ayuda a confirmar alarma.
+        No debe activarse por movimiento normal.
+
+        8. Giro anormal después del choque: $postCrashGyroThreshold °/s
+        Botones: Giro choque - / Giro choque +
+        Detecta si después del choque sigue girando o dando vueltas.
+
+        9. Tiempo de movimiento anormal: ${postCrashMotionRequiredMs} ms
+        Botones: Tiempo mov - / Tiempo mov +
+        El movimiento raro debe durar este tiempo para activar la alarma.
+
+        VENTANAS DE DECISIÓN
+
+        10. Espera inicial después del posible choque: ${eventWindowMs} ms
+        Botones: Espera - / Espera +
+        Tiempo antes de empezar a revisar si la persona responde, queda quieta o se mueve raro.
+
+        11. Tiempo máximo para confirmar o descartar: ${postEventWindowMs} ms
+        Botones: Confirmar - / Confirmar +
+        Si no hay quietud ni movimiento anormal dentro de este tiempo, se descarta el posible choque.
         """.trimIndent()
     }
 
@@ -775,6 +971,9 @@ class MainActivity : AppCompatActivity(), BleManager.Listener {
             .remove("${profile}_stillnessRequiredMs")
             .remove("${profile}_eventWindowMs")
             .remove("${profile}_postEventWindowMs")
+            .remove("${profile}_postCrashDeltaAccThreshold")
+            .remove("${profile}_postCrashGyroThreshold")
+            .remove("${profile}_postCrashMotionRequiredMs")
             .apply()
 
         updateCalibrationText()

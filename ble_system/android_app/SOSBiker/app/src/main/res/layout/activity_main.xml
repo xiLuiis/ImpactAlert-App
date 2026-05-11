@@ -332,83 +332,254 @@
                 android:textColor="#000000"
                 android:background="#EEEEEE"
                 android:padding="10dp" />
-            <Button
-                android:id="@+id/btnImpactMinus"
+            <!-- 1. FUERZA DEL GOLPE -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Impact -0.5" />
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
 
-            <Button
-                android:id="@+id/btnImpactPlus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Impact +0.5" />
+                <Button
+                    android:id="@+id/btnImpactMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="1. Golpe -" />
 
-            <Button
-                android:id="@+id/btnGyroMinus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Gyro -20" />
+                <Button
+                    android:id="@+id/btnImpactPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="1. Golpe +" />
+            </LinearLayout>
 
-            <Button
-                android:id="@+id/btnGyroPlus"
+            <!-- 2. CAMBIO BRUSCO DE MOVIMIENTO -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Gyro +20" />
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
 
-            <Button
-                android:id="@+id/btnDeltaAccMinus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Delta Acc -0.2" />
+                <Button
+                    android:id="@+id/btnDeltaAccMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="2. Cambio mov -" />
 
-            <Button
-                android:id="@+id/btnDeltaAccPlus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Delta Acc +0.2" />
+                <Button
+                    android:id="@+id/btnDeltaAccPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="2. Cambio mov +" />
+            </LinearLayout>
 
-            <Button
-                android:id="@+id/btnStillnessMinus"
+            <!-- 3. GIRO BRUSCO -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Stillness -200ms" />
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
 
-            <Button
-                android:id="@+id/btnStillnessPlus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Stillness +200ms" />
+                <Button
+                    android:id="@+id/btnGyroMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="3. Giro -" />
 
-            <Button
-                android:id="@+id/btnEventWindowMinus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Event Window -100ms" />
+                <Button
+                    android:id="@+id/btnGyroPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="3. Giro +" />
+            </LinearLayout>
 
-            <Button
-                android:id="@+id/btnEventWindowPlus"
+            <!-- 4. MOVIMIENTO PARA VALIDAR GIRO -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Event Window +100ms" />
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
 
-            <Button
-                android:id="@+id/btnPostEventMinus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Post Event -500ms" />
+                <Button
+                    android:id="@+id/btnMinAccRotationMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="4. Mov giro -" />
 
-            <Button
-                android:id="@+id/btnPostEventPlus"
+                <Button
+                    android:id="@+id/btnMinAccRotationPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="4. Mov giro +" />
+            </LinearLayout>
+
+            <!-- 5. TIEMPO SIN MOVIMIENTO -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Post Event +500ms" />
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btnStillnessMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="5. Quietud -" />
+
+                <Button
+                    android:id="@+id/btnStillnessPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="5. Quietud +" />
+            </LinearLayout>
+
+            <!-- 6. LÍMITE PARA CONSIDERAR QUIETO -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btnStillGyroMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="6. Límite quieto -" />
+
+                <Button
+                    android:id="@+id/btnStillGyroPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="6. Límite quieto +" />
+            </LinearLayout>
+
+            <!-- 7. MOVIMIENTO ANORMAL DESPUÉS DEL CHOQUE -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btnPostCrashAccMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="7. Movimiento raro -" />
+
+                <Button
+                    android:id="@+id/btnPostCrashAccPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="7. Movimiento raro +" />
+            </LinearLayout>
+
+            <!-- 8. GIRO ANORMAL DESPUÉS DEL CHOQUE -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btnPostCrashGyroMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="8. Giro choque -" />
+
+                <Button
+                    android:id="@+id/btnPostCrashGyroPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="8. Giro choque +" />
+            </LinearLayout>
+
+            <!-- 9. TIEMPO DE MOVIMIENTO ANORMAL -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btnPostCrashTimeMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="9. Tiempo mov -" />
+
+                <Button
+                    android:id="@+id/btnPostCrashTimePlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="9. Tiempo mov +" />
+            </LinearLayout>
+
+            <!-- 10. ESPERA INICIAL -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btnEventWindowMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="10. Espera -" />
+
+                <Button
+                    android:id="@+id/btnEventWindowPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="10. Espera +" />
+            </LinearLayout>
+
+            <!-- 11. TIEMPO PARA CONFIRMAR -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <Button
+                    android:id="@+id/btnPostEventMinus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="11. Confirmar -" />
+
+                <Button
+                    android:id="@+id/btnPostEventPlus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="11. Confirmar +" />
+            </LinearLayout>
 
             <Button
                 android:id="@+id/btnResetMediumCalibration"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="RESET CURRENT PROFILE" />
+                android:layout_marginTop="16dp"
+                android:text="REINICIAR PERFIL ACTUAL" />
         </LinearLayout>
     </ScrollView>
 
