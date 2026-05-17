@@ -4,48 +4,103 @@
 #include "LSM6DS3.h"
 #include <math.h>
 #include <string.h>
+#include <PDM.h>
 #include <DFRobotDFPlayerMini.h>
 
-#define ENABLE_VOICE_ML 0
-
-#if ENABLE_VOICE_ML
-#include <PDM.h>
+// =====================================================
+// EDGE IMPULSE LIBRARY
+// =====================================================
+// Si tu nueva biblioteca de Edge Impulse genera otro nombre,
+// cambia SOLO esta línea por el nuevo *_inferencing.h.
 #include "Edgar9206-project-1_inferencing.h"
-#endif
 
+// =====================================================
+// CONFIG GENERAL
+// =====================================================
 static const char* BLE_NAME = "SOS_Biker_XIAO";
 
+// ---------------- botón ----------------
 static const int CANCEL_BUTTON_PIN = 2;
 static const uint32_t BUTTON_DEBOUNCE_MS = 40;
+
+// ---------------- tira LED ----------------
+// Cambia este pin si en tu PCB usaste otro.
+// IMPORTANTE: si es una tira LED real, no la alimentes directo desde el pin.
+// Usa MOSFET/transistor; este pin solo debe mandar la señal de control.
+static const int LED_STRIP_PIN = 3;   // D3 en XIAO
+static const uint32_t LED_EMERGENCY_BLINK_MS = 250;  // parpadeo durante alerta
+static const uint32_t LED_IDLE_BLINK_MS = 650;       // parpadeo esperando BLE
+static const uint32_t LED_STARTUP_SWEEP_MS = 6000;   // efecto de encendido 0% -> 100%; se completa aunque BLE conecte
+static const uint32_t LED_STARTUP_BLINK_MS = 3000;   // parpadeo inicial obligatorio antes de apagar por BLE
+
+// ---------------- ML tuning AUXILIO ----------------
+static const float HELP_THRESHOLD = 0.70f;
+static const uint8_t HELP_MIN_HITS = 2;
+
+// ---------------- tiempos de protocolo ----------------
+static const uint32_t INTRO_AUDIO_MS = 2600;
+static const uint32_t COUNTDOWN_MS = 10000;
+static const uint32_t CANCEL_COOLDOWN_MS = 5000;
 static const uint32_t EMERGENCY_COOLDOWN_MS = 7000;
 
-static const float HELP_THRESHOLD = 0.25f;
-static const uint8_t HELP_MIN_HITS = 1;
+// ---------------- DFPlayer tracks ----------------
+// /mp3/0001.mp3 = Protocolo de emergencia iniciado
+// /mp3/0010.mp3 = 10
+// /mp3/0009.mp3 = 9
+// /mp3/0008.mp3 = 8
+// /mp3/0007.mp3 = 7
+// /mp3/0006.mp3 = 6
+// /mp3/0005.mp3 = 5
+// /mp3/0004.mp3 = 4
+// /mp3/0003.mp3 = 3
+// /mp3/0002.mp3 = 2
+// /mp3/0012.mp3 = 1
+// /mp3/0011.mp3 = Ayuda en camino, mantenga la calma
+// /mp3/0013.mp3 = Alerta cancelada
+static const uint16_t TRACK_INTRO = 1;
+static const uint16_t TRACK_FINAL = 11;
+static const uint16_t TRACK_ONE = 12;
+static const uint16_t TRACK_CANCEL = 13;
 
+// =====================================================
+// BLE CUSTOM SERVICE
+// =====================================================
 BLEService imuService("19B10000-E8F2-537E-4F6C-D104768A1214");
 BLECharacteristic statusChar ("19B10001-E8F2-537E-4F6C-D104768A1214");
 BLECharacteristic accChar    ("19B10002-E8F2-537E-4F6C-D104768A1214");
 BLECharacteristic gyroChar   ("19B10003-E8F2-537E-4F6C-D104768A1214");
 BLECharacteristic commandChar("19B10004-E8F2-537E-4F6C-D104768A1214");
 
+// =====================================================
+// HARDWARE
+// =====================================================
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
 DFRobotDFPlayerMini dfPlayer;
 
 bool imuOk = false;
 bool bleConnected = false;
-bool localAlertActive = false;
 bool dfPlayerOk = false;
 bool mlReady = false;
 
+// =====================================================
+// LED STRIP STATE
+// =====================================================
+bool ledBlinkState = false;
+bool ledStartupDone = false;
+bool ledStartupBlinkDone = false;
+uint32_t ledStartupStartMs = 0;
+uint32_t ledStartupBlinkStartMs = 0;
+uint32_t lastLedBlinkMs = 0;
+
+// =====================================================
+// IMU / CRASH DETECTION
+// =====================================================
 uint32_t lastSensorRead = 0;
 uint32_t lastBleAccSend = 0;
 uint32_t lastBleGyroSend = 0;
 uint32_t lastStatusMsg = 0;
 uint32_t lastDebugMsg = 0;
 uint32_t lastEmergencyTime = 0;
-
-bool lastButtonReading = HIGH;
-uint32_t lastButtonDebounceMs = 0;
 
 float ax = 0.0f, ay = 0.0f, az = 0.0f;
 float gx = 0.0f, gy = 0.0f, gz = 0.0f;
@@ -73,6 +128,15 @@ const uint32_t POST_EVENT_WINDOW_MS = 6000;
 uint32_t stateStartMs = 0;
 uint32_t stillnessStartMs = 0;
 
+// =====================================================
+// BUTTON
+// =====================================================
+bool lastButtonReading = HIGH;
+uint32_t lastButtonDebounceMs = 0;
+
+// =====================================================
+// CRASH STATE
+// =====================================================
 enum CrashState {
   STATE_NORMAL,
   STATE_EVENT_DETECTED,
@@ -82,7 +146,40 @@ enum CrashState {
 
 CrashState crashState = STATE_NORMAL;
 
-#if ENABLE_VOICE_ML
+// =====================================================
+// EMERGENCY PROTOCOL STATE
+// =====================================================
+enum SystemMode {
+  MODE_NORMAL = 0,
+  MODE_PRE_ALERT,
+  MODE_CONFIRMED,
+  MODE_CANCELED
+};
+
+SystemMode systemMode = MODE_NORMAL;
+
+// origen del disparo
+enum TriggerSource {
+  TRIGGER_NONE = 0,
+  TRIGGER_VOICE,
+  TRIGGER_FALL,
+  TRIGGER_BLE,
+  TRIGGER_SERIAL
+};
+
+TriggerSource triggerSource = TRIGGER_NONE;
+
+bool introPlaying = false;
+bool countdownActive = false;
+bool cancelCooldownActive = false;
+uint32_t introStartMs = 0;
+uint32_t countdownStartMs = 0;
+uint32_t cancelCooldownStartMs = 0;
+uint8_t lastCountdownSecond = 255;
+
+// =====================================================
+// EDGE IMPULSE / AUDIO BUFFER
+// =====================================================
 typedef struct {
   int16_t *buffer;
   volatile uint8_t buf_ready;
@@ -95,8 +192,10 @@ static signed short sampleBuffer[2048];
 static bool debug_nn = false;
 float lastHelpScore = 0.0f;
 uint8_t helpHits = 0;
-#endif
 
+// =====================================================
+// TEXT HELPERS
+// =====================================================
 const char* stateToString(CrashState s) {
   switch (s) {
     case STATE_NORMAL: return "NORMAL";
@@ -107,6 +206,34 @@ const char* stateToString(CrashState s) {
   }
 }
 
+const char* modeToString(SystemMode mode) {
+  switch (mode) {
+    case MODE_NORMAL: return "NORMAL";
+    case MODE_PRE_ALERT: return "PRE_ALERT";
+    case MODE_CONFIRMED: return "EMERGENCY_ACTIVE";
+    case MODE_CANCELED: return "CANCELED";
+    default: return "UNKNOWN";
+  }
+}
+
+const char* triggerToString(TriggerSource source) {
+  switch (source) {
+    case TRIGGER_NONE: return "NONE";
+    case TRIGGER_VOICE: return "VOICE";
+    case TRIGGER_FALL: return "FALL";
+    case TRIGGER_BLE: return "BLE";
+    case TRIGGER_SERIAL: return "SERIAL";
+    default: return "UNKNOWN";
+  }
+}
+
+bool isEmergencyMode() {
+  return systemMode == MODE_PRE_ALERT || systemMode == MODE_CONFIRMED;
+}
+
+// =====================================================
+// BLE HELPERS
+// =====================================================
 void writeNotify(BLECharacteristic& chr, const char* msg) {
   chr.write((const uint8_t*)msg, strlen(msg));
   if (bleConnected) chr.notify((const uint8_t*)msg, strlen(msg));
@@ -115,13 +242,28 @@ void writeNotify(BLECharacteristic& chr, const char* msg) {
 void updateBleState() {
   if (!imuOk) {
     writeNotify(statusChar, "IMU_FAIL");
-  } else if (localAlertActive) {
-    writeNotify(statusChar, "EMERGENCY_ACTIVE");
-  } else {
-    writeNotify(statusChar, "IMU_OK");
+    return;
+  }
+
+  switch (systemMode) {
+    case MODE_NORMAL:
+      writeNotify(statusChar, "IMU_OK");
+      break;
+    case MODE_PRE_ALERT:
+      writeNotify(statusChar, "PRE_ALERT");
+      break;
+    case MODE_CONFIRMED:
+      writeNotify(statusChar, "EMERGENCY_ACTIVE");
+      break;
+    case MODE_CANCELED:
+      writeNotify(statusChar, "CANCELED");
+      break;
   }
 }
 
+// =====================================================
+// DFPLAYER HELPERS
+// =====================================================
 void playMp3Track(uint16_t trackNumber) {
   if (!dfPlayerOk) {
     Serial.println("[AUD] DFPlayer not available");
@@ -129,8 +271,13 @@ void playMp3Track(uint16_t trackNumber) {
   }
 
   dfPlayer.playMp3Folder(trackNumber);
-  Serial.print("[AUD] Play track ");
-  Serial.println(trackNumber);
+
+  Serial.print("[AUD] Play /mp3/");
+  if (trackNumber < 10) Serial.print("000");
+  else if (trackNumber < 100) Serial.print("00");
+  else if (trackNumber < 1000) Serial.print("0");
+  Serial.print(trackNumber);
+  Serial.println(".mp3");
 }
 
 void stopAudio() {
@@ -139,6 +286,9 @@ void stopAudio() {
   Serial.println("[AUD] Stop");
 }
 
+// =====================================================
+// CRASH HELPERS
+// =====================================================
 void resetCrashState() {
   if (crashState != STATE_NORMAL) {
     Serial.print("[STATE] ");
@@ -151,44 +301,6 @@ void resetCrashState() {
   stillnessStartMs = 0;
   peakAccMag = 0.0f;
   peakGyroMag = 0.0f;
-}
-
-void triggerLocalAlert() {
-  if (localAlertActive) return;
-
-  localAlertActive = true;
-  lastEmergencyTime = millis();
-  crashState = STATE_CONFIRMED;
-
-  Serial.println(">>> EMERGENCY ACTIVE <<<");
-  playMp3Track(11);
-  updateBleState();
-}
-
-void clearLocalAlert() {
-  if (!localAlertActive && crashState == STATE_NORMAL) return;
-
-  localAlertActive = false;
-  stopAudio();
-  resetCrashState();
-
-  Serial.println(">>> LOCAL ALERT OFF <<<");
-  updateBleState();
-}
-
-void connect_callback(uint16_t conn_handle) {
-  (void)conn_handle;
-  bleConnected = true;
-  Serial.println("[BLE] Connected");
-  updateBleState();
-}
-
-void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
-  (void)conn_handle;
-  (void)reason;
-  bleConnected = false;
-  Serial.println("[BLE] Disconnected");
-  Bluefruit.Advertising.start(0);
 }
 
 void setCrashState(CrashState newState, const char* reason) {
@@ -225,13 +337,515 @@ bool isStillNow() {
          gyroMag <= STILL_GYRO_THRESHOLD;
 }
 
-void evaluateLocalCrash() {
-  if (bleConnected) {
-    if (!localAlertActive) resetCrashState();
+// =====================================================
+// EMERGENCY FLOW
+// =====================================================
+void enterNormalMode() {
+  systemMode = MODE_NORMAL;
+  introPlaying = false;
+  countdownActive = false;
+  cancelCooldownActive = false;
+  helpHits = 0;
+  triggerSource = TRIGGER_NONE;
+  resetCrashState();
+  updateBleState();
+  Serial.println("[SYS] Mode NORMAL");
+}
+
+void enterCanceledMode() {
+  systemMode = MODE_CANCELED;
+  introPlaying = false;
+  countdownActive = false;
+  helpHits = 0;
+
+  cancelCooldownActive = true;
+  cancelCooldownStartMs = millis();
+
+  updateBleState();
+  playMp3Track(TRACK_CANCEL);
+  Serial.println("[SYS] Emergency canceled");
+}
+
+void enterConfirmedMode() {
+  systemMode = MODE_CONFIRMED;
+  introPlaying = false;
+  countdownActive = false;
+  lastEmergencyTime = millis();
+  crashState = STATE_CONFIRMED;
+
+  updateBleState();
+  playMp3Track(TRACK_FINAL);
+
+  Serial.println(">>> EMERGENCY ACTIVE <<<");
+}
+
+void startPreAlert(TriggerSource source) {
+  if (systemMode == MODE_PRE_ALERT || systemMode == MODE_CONFIRMED) return;
+  if (cancelCooldownActive) return;
+  if (millis() - lastEmergencyTime < EMERGENCY_COOLDOWN_MS) return;
+
+  systemMode = MODE_PRE_ALERT;
+  triggerSource = source;
+  introPlaying = true;
+  countdownActive = false;
+  introStartMs = millis();
+  lastCountdownSecond = 255;
+
+  updateBleState();
+  playMp3Track(TRACK_INTRO);
+
+  Serial.print("[SYS] Emergency protocol started | trigger=");
+  Serial.println(triggerToString(triggerSource));
+}
+
+void startPreAlertByVoice() {
+  Serial.println("[ML] AUXILIO DETECTADO");
+  startPreAlert(TRIGGER_VOICE);
+}
+
+void startPreAlertByFall() {
+  Serial.println("[FALL] Fall confirmed -> pre-alert");
+  startPreAlert(TRIGGER_FALL);
+}
+
+void startPreAlertByBle() {
+  Serial.println("[BLE] Remote alert command -> pre-alert");
+  startPreAlert(TRIGGER_BLE);
+}
+
+void startPreAlertBySerial() {
+  Serial.println("[SERIAL] Manual alert -> pre-alert");
+  startPreAlert(TRIGGER_SERIAL);
+}
+
+void cancelAlert() {
+  if (systemMode == MODE_NORMAL) return;
+  stopAudio();
+  enterCanceledMode();
+}
+
+void forceNormalMode() {
+  stopAudio();
+  enterNormalMode();
+}
+
+// =====================================================
+// BLE CALLBACKS
+// =====================================================
+void connect_callback(uint16_t conn_handle) {
+  (void)conn_handle;
+  bleConnected = true;
+  Serial.println("[BLE] Connected");
+  updateBleState();
+}
+
+void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
+  (void)conn_handle;
+  (void)reason;
+  bleConnected = false;
+  Serial.println("[BLE] Disconnected");
+  Bluefruit.Advertising.start(0);
+}
+
+void handleBleCommand(uint16_t conn_hdl, BLECharacteristic* chr, uint8_t* data, uint16_t len) {
+  (void)conn_hdl;
+  (void)chr;
+
+  if (len == 0) return;
+
+  char cmd[32];
+  uint16_t copyLen = (len < sizeof(cmd) - 1) ? len : (sizeof(cmd) - 1);
+  memcpy(cmd, data, copyLen);
+  cmd[copyLen] = '\0';
+
+  Serial.print("[CMD] RX: ");
+  Serial.println(cmd);
+
+  if (strcmp(cmd, "ALERT_ON") == 0 ||
+      strcmp(cmd, "HELP") == 0 ||
+      strcmp(cmd, "VOICE") == 0) {
+    startPreAlertByVoice();
     return;
   }
 
-  if (localAlertActive) return;
+  if (strcmp(cmd, "FALL") == 0) {
+    startPreAlertByFall();
+    return;
+  }
+
+  if (strcmp(cmd, "ALERT_OFF") == 0 ||
+      strcmp(cmd, "CANCEL") == 0 ||
+      strcmp(cmd, "STOP") == 0) {
+    cancelAlert();
+    return;
+  }
+
+  if (strcmp(cmd, "NORMAL") == 0) {
+    forceNormalMode();
+    return;
+  }
+}
+
+
+// =====================================================
+// LED STRIP TASK
+// =====================================================
+void setLedStripLevel(uint8_t level) {
+  // Para tira LED normal de 2 cables: controla brillo por PWM.
+  // level: 0 = apagado, 255 = encendido completo.
+  analogWrite(LED_STRIP_PIN, level);
+}
+
+void setLedStrip(bool on) {
+  setLedStripLevel(on ? 255 : 0);
+}
+
+void taskLedStrip() {
+  uint32_t now = millis();
+
+  // Prioridad 1:
+  // Si está en protocolo de emergencia o emergencia confirmada, parpadea rápido.
+  if (systemMode == MODE_PRE_ALERT || systemMode == MODE_CONFIRMED) {
+    if (now - lastLedBlinkMs >= LED_EMERGENCY_BLINK_MS) {
+      lastLedBlinkMs = now;
+      ledBlinkState = !ledBlinkState;
+      setLedStrip(ledBlinkState);
+    }
+    return;
+  }
+
+  // Prioridad 2:
+  // Al energizar el módulo, la secuencia inicial se completa aunque BLE conecte rápido.
+  // NOTA: con una tira COB/LED normal de 2 cables no se puede encender físicamente
+  // de punta a punta; esto hace un efecto de brillo 0% -> 100%.
+  if (!ledStartupDone) {
+    uint32_t elapsed = now - ledStartupStartMs;
+
+    if (elapsed >= LED_STARTUP_SWEEP_MS) {
+      ledStartupDone = true;
+      ledStartupBlinkDone = false;
+      ledStartupBlinkStartMs = now;
+      lastLedBlinkMs = now;
+      ledBlinkState = true;
+      setLedStrip(true);
+    } else {
+      uint8_t level = (uint8_t)((elapsed * 255UL) / LED_STARTUP_SWEEP_MS);
+      setLedStripLevel(level);
+    }
+    return;
+  }
+
+  // Prioridad 3:
+  // Después de la secuencia, parpadea unos segundos aunque BLE ya esté conectado.
+  // Esto permite ver: encendido progresivo -> parpadeo -> apagado por BLE.
+  if (!ledStartupBlinkDone) {
+    if (now - lastLedBlinkMs >= LED_IDLE_BLINK_MS) {
+      lastLedBlinkMs = now;
+      ledBlinkState = !ledBlinkState;
+      setLedStrip(ledBlinkState);
+    }
+
+    if (now - ledStartupBlinkStartMs >= LED_STARTUP_BLINK_MS) {
+      ledStartupBlinkDone = true;
+    }
+    return;
+  }
+
+  // Prioridad 4:
+  // Después del parpadeo inicial, si BLE está conectado, se apaga.
+  if (bleConnected) {
+    ledBlinkState = false;
+    setLedStrip(false);
+    return;
+  }
+
+  // Prioridad 5:
+  // Si está energizado, BLE no conectado y no hay alerta: queda parpadeando.
+  if (now - lastLedBlinkMs >= LED_IDLE_BLINK_MS) {
+    lastLedBlinkMs = now;
+    ledBlinkState = !ledBlinkState;
+    setLedStrip(ledBlinkState);
+  }
+}
+
+// =====================================================
+// BUTTON TASK
+// =====================================================
+void taskCancelButton() {
+  bool reading = digitalRead(CANCEL_BUTTON_PIN);
+
+  if (reading != lastButtonReading) {
+    lastButtonDebounceMs = millis();
+    lastButtonReading = reading;
+  }
+
+  if ((millis() - lastButtonDebounceMs) > BUTTON_DEBOUNCE_MS) {
+    static bool stableState = HIGH;
+
+    if (reading != stableState) {
+      stableState = reading;
+
+      if (stableState == LOW) {
+        Serial.println("[BTN] Cancel button pressed");
+        cancelAlert();
+      }
+    }
+  }
+}
+
+// =====================================================
+// EDGE IMPULSE HELPERS - AUXILIO
+// =====================================================
+int getHelpIndex() {
+  for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+    if (strcmp(ei_classifier_inferencing_categories[i], "auxilio") == 0 ||
+        strcmp(ei_classifier_inferencing_categories[i], "AUXILIO") == 0 ||
+        strcmp(ei_classifier_inferencing_categories[i], "Auxilio") == 0) {
+      return (int)i;
+    }
+  }
+  return -1;
+}
+
+static void pdm_data_ready_inference_callback(void) {
+  int bytesAvailable = PDM.available();
+  int bytesRead = PDM.read((char *)&sampleBuffer[0], bytesAvailable);
+
+  if (inference.buf_ready == 0) {
+    for (int i = 0; i < (bytesRead >> 1); i++) {
+      inference.buffer[inference.buf_count++] = sampleBuffer[i];
+
+      if (inference.buf_count >= inference.n_samples) {
+        inference.buf_count = 0;
+        inference.buf_ready = 1;
+        break;
+      }
+    }
+  }
+}
+
+static bool microphone_inference_start(uint32_t n_samples) {
+  inference.buffer = (int16_t *)malloc(n_samples * sizeof(int16_t));
+  if (inference.buffer == NULL) return false;
+
+  inference.buf_count = 0;
+  inference.n_samples = n_samples;
+  inference.buf_ready = 0;
+
+  PDM.onReceive(&pdm_data_ready_inference_callback);
+  PDM.setBufferSize(4096);
+
+  if (!PDM.begin(1, EI_CLASSIFIER_FREQUENCY)) {
+    ei_printf("Failed to start PDM!\n");
+    PDM.end();
+    free(inference.buffer);
+    inference.buffer = nullptr;
+    return false;
+  }
+
+  PDM.setGain(64);
+  return true;
+}
+
+static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
+  numpy::int16_to_float(&inference.buffer[offset], out_ptr, length);
+  return 0;
+}
+
+bool initML() {
+  ei_printf("Inferencing settings:\n");
+  ei_printf("\tInterval: %.2f ms.\n", (float)EI_CLASSIFIER_INTERVAL_MS);
+  ei_printf("\tFrame size: %d\n", EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE);
+  ei_printf("\tSample length: %d ms.\n", EI_CLASSIFIER_RAW_SAMPLE_COUNT / 16);
+  ei_printf("\tNo. of classes: %d\n", EI_CLASSIFIER_LABEL_COUNT);
+
+  for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+    Serial.print("[ML] label ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.println(ei_classifier_inferencing_categories[i]);
+  }
+
+  if (!microphone_inference_start(EI_CLASSIFIER_RAW_SAMPLE_COUNT)) {
+    Serial.println("[ML] MIC FAIL");
+    return false;
+  }
+
+  int helpIndex = getHelpIndex();
+  if (helpIndex < 0) {
+    Serial.println("[ML] Etiqueta AUXILIO no encontrada");
+  } else {
+    Serial.print("[ML] helpIndex=");
+    Serial.println(helpIndex);
+  }
+
+  Serial.println("[ML] MIC OK");
+  return true;
+}
+
+void taskVoiceML() {
+  if (!mlReady) return;
+
+  if (systemMode == MODE_PRE_ALERT ||
+      systemMode == MODE_CONFIRMED ||
+      systemMode == MODE_CANCELED ||
+      cancelCooldownActive) {
+    return;
+  }
+
+  if (inference.buf_ready == 0) return;
+
+  signal_t signal;
+  signal.total_length = EI_CLASSIFIER_RAW_SAMPLE_COUNT;
+  signal.get_data = &microphone_audio_signal_get_data;
+
+  ei_impulse_result_t result = { 0 };
+  EI_IMPULSE_ERROR r = run_classifier(&signal, &result, debug_nn);
+  Serial.println("[ML] --- CLASIFICACION ---");
+for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+  Serial.print("[ML] ");
+  Serial.print(ei_classifier_inferencing_categories[i]);
+  Serial.print(" = ");
+  Serial.println(result.classification[i].value, 5);
+}
+
+  if (r != EI_IMPULSE_OK) {
+    Serial.print("[ML] ERR classifier=");
+    Serial.println((int)r);
+    inference.buf_ready = 0;
+    inference.buf_count = 0;
+    return;
+  }
+
+  int helpIndex = getHelpIndex();
+  if (helpIndex >= 0) {
+    float auxilioScore = result.classification[helpIndex].value;
+    float maxOther = 0.0f;
+
+    for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+      if ((int)i == helpIndex) continue;
+      if (result.classification[i].value > maxOther) {
+        maxOther = result.classification[i].value;
+      }
+    }
+
+    lastHelpScore = auxilioScore;
+
+    Serial.print("[ML] AUXILIO=");
+    Serial.print(auxilioScore, 5);
+    Serial.print(" OTHER_MAX=");
+    Serial.print(maxOther, 5);
+    Serial.print(" HITS=");
+    Serial.println(helpHits);
+
+    if (auxilioScore >= HELP_THRESHOLD && auxilioScore > maxOther) {
+      if (helpHits < 255) helpHits++;
+    } else {
+      helpHits = 0;
+    }
+
+    if (helpHits >= HELP_MIN_HITS) {
+      startPreAlertByVoice();
+      helpHits = 0;
+    }
+  }
+
+  inference.buf_ready = 0;
+  inference.buf_count = 0;
+}
+
+// =====================================================
+// INIT
+// =====================================================
+void initIMU() {
+  Wire.begin();
+
+  if (myIMU.begin() == 0) {
+    imuOk = true;
+    Serial.println("[INIT] IMU OK");
+  } else {
+    imuOk = false;
+    Serial.println("[INIT] IMU FAIL");
+  }
+}
+
+void initBLE() {
+  Bluefruit.begin();
+  Bluefruit.setTxPower(4);
+  Bluefruit.setName(BLE_NAME);
+
+  Bluefruit.Periph.setConnectCallback(connect_callback);
+  Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
+
+  imuService.begin();
+
+  statusChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  statusChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  statusChar.setMaxLen(32);
+  statusChar.begin();
+
+  accChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  accChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  accChar.setMaxLen(24);
+  accChar.begin();
+
+  gyroChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  gyroChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  gyroChar.setMaxLen(24);
+  gyroChar.begin();
+
+  commandChar.setProperties(CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
+  commandChar.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  commandChar.setMaxLen(20);
+  commandChar.setWriteCallback(handleBleCommand);
+  commandChar.begin();
+
+  updateBleState();
+
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(imuService);
+  Bluefruit.ScanResponse.addName();
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244);
+  Bluefruit.Advertising.setFastTimeout(30);
+  Bluefruit.Advertising.start(0);
+
+  Serial.println("[INIT] BLE OK");
+  Serial.print("[BLE] Advertising as: ");
+  Serial.println(BLE_NAME);
+}
+
+void initDFPlayer() {
+  Serial1.begin(9600);
+  delay(1500);
+
+  Serial.println("[AUD] Inicializando DFPlayer...");
+
+  if (dfPlayer.begin(Serial1, true, true)) {
+    dfPlayerOk = true;
+    dfPlayer.volume(30);
+    dfPlayer.outputDevice(DFPLAYER_DEVICE_SD);
+    Serial.println("[INIT] DFPLAYER OK");
+  } else {
+    dfPlayerOk = false;
+    Serial.println("[INIT] DFPLAYER FAIL");
+  }
+}
+
+// =====================================================
+// TASKS
+// =====================================================
+void evaluateLocalCrash() {
+  // Si el celular está conectado por BLE, se mantiene la lógica del código base:
+  // el XIAO solo confirma caídas localmente cuando no hay conexión BLE.
+  if (bleConnected) {
+    if (!isEmergencyMode()) resetCrashState();
+    return;
+  }
+
+  if (isEmergencyMode()) return;
+  if (cancelCooldownActive) return;
   if (millis() - lastEmergencyTime < EMERGENCY_COOLDOWN_MS) return;
 
   bool stillNow = isStillNow();
@@ -282,7 +896,7 @@ void evaluateLocalCrash() {
                  "confirmed | peakAcc=%.2f peakGyro=%.2f stillMs=%lu",
                  peakAccMag, peakGyroMag, (unsigned long)stillnessDuration);
         setCrashState(STATE_CONFIRMED, reason);
-        triggerLocalAlert();
+        startPreAlertByFall();
       } else if (elapsed > POST_EVENT_WINDOW_MS) {
         resetCrashState();
       }
@@ -291,247 +905,6 @@ void evaluateLocalCrash() {
 
     case STATE_CONFIRMED:
       break;
-  }
-}
-
-void handleBleCommand(uint16_t conn_hdl, BLECharacteristic* chr, uint8_t* data, uint16_t len) {
-  (void)conn_hdl;
-  (void)chr;
-
-  if (len == 0) return;
-
-  char cmd[32];
-  uint16_t copyLen = (len < sizeof(cmd) - 1) ? len : (sizeof(cmd) - 1);
-  memcpy(cmd, data, copyLen);
-  cmd[copyLen] = '\0';
-
-  Serial.print("BLE COMMAND RECEIVED: ");
-  Serial.println(cmd);
-
-  if (strcmp(cmd, "ALERT_ON") == 0 || strcmp(cmd, "HELP") == 0 || strcmp(cmd, "VOICE") == 0 || strcmp(cmd, "FALL") == 0) {
-    triggerLocalAlert();
-  } else if (strcmp(cmd, "ALERT_OFF") == 0 || strcmp(cmd, "CANCEL") == 0 || strcmp(cmd, "STOP") == 0 || strcmp(cmd, "NORMAL") == 0) {
-    clearLocalAlert();
-  }
-}
-
-void taskCancelButton() {
-  bool reading = digitalRead(CANCEL_BUTTON_PIN);
-
-  if (reading != lastButtonReading) {
-    lastButtonDebounceMs = millis();
-    lastButtonReading = reading;
-  }
-
-  if ((millis() - lastButtonDebounceMs) > BUTTON_DEBOUNCE_MS) {
-    static bool stableState = HIGH;
-
-    if (reading != stableState) {
-      stableState = reading;
-
-      if (stableState == LOW) {
-        Serial.println("[BTN] Cancel button pressed");
-        clearLocalAlert();
-      }
-    }
-  }
-}
-
-#if ENABLE_VOICE_ML
-int getHelpIndex() {
-  for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
-    if (strcmp(ei_classifier_inferencing_categories[i], "ayuda") == 0 ||
-        strcmp(ei_classifier_inferencing_categories[i], "AYUDA") == 0 ||
-        strcmp(ei_classifier_inferencing_categories[i], "help") == 0 ||
-        strcmp(ei_classifier_inferencing_categories[i], "HELP") == 0) {
-      return (int)i;
-    }
-  }
-  return -1;
-}
-
-static void pdm_data_ready_inference_callback(void) {
-  int bytesAvailable = PDM.available();
-  int bytesRead = PDM.read((char *)&sampleBuffer[0], bytesAvailable);
-
-  if (inference.buf_ready == 0) {
-    for (int i = 0; i < (bytesRead >> 1); i++) {
-      inference.buffer[inference.buf_count++] = sampleBuffer[i];
-
-      if (inference.buf_count >= inference.n_samples) {
-        inference.buf_count = 0;
-        inference.buf_ready = 1;
-        break;
-      }
-    }
-  }
-}
-
-static bool microphone_inference_start(uint32_t n_samples) {
-  inference.buffer = (int16_t *)malloc(n_samples * sizeof(int16_t));
-  if (inference.buffer == NULL) return false;
-
-  inference.buf_count = 0;
-  inference.n_samples = n_samples;
-  inference.buf_ready = 0;
-
-  PDM.onReceive(&pdm_data_ready_inference_callback);
-  PDM.setBufferSize(4096);
-
-  if (!PDM.begin(1, EI_CLASSIFIER_FREQUENCY)) {
-    ei_printf("Failed to start PDM!\n");
-    PDM.end();
-    free(inference.buffer);
-    inference.buffer = nullptr;
-    return false;
-  }
-
-  PDM.setGain(127);
-  return true;
-}
-
-static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
-  numpy::int16_to_float(&inference.buffer[offset], out_ptr, length);
-  return 0;
-}
-
-bool initML() {
-  if (!microphone_inference_start(EI_CLASSIFIER_RAW_SAMPLE_COUNT)) {
-    Serial.println("[ML] MIC FAIL");
-    return false;
-  }
-
-  int helpIndex = getHelpIndex();
-  if (helpIndex < 0) Serial.println("[ML] ayuda/help label not found");
-  else Serial.println("[ML] MIC OK");
-
-  return true;
-}
-
-void taskVoiceML() {
-  if (!mlReady) return;
-  if (localAlertActive) return;
-  if (inference.buf_ready == 0) return;
-
-  signal_t signal;
-  signal.total_length = EI_CLASSIFIER_RAW_SAMPLE_COUNT;
-  signal.get_data = &microphone_audio_signal_get_data;
-
-  ei_impulse_result_t result = { 0 };
-  EI_IMPULSE_ERROR r = run_classifier(&signal, &result, debug_nn);
-
-  if (r != EI_IMPULSE_OK) {
-    inference.buf_ready = 0;
-    inference.buf_count = 0;
-    return;
-  }
-
-  int helpIndex = getHelpIndex();
-  if (helpIndex >= 0) {
-    float ayudaScore = result.classification[helpIndex].value;
-    float maxOther = 0.0f;
-
-    for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
-      if ((int)i == helpIndex) continue;
-      if (result.classification[i].value > maxOther) maxOther = result.classification[i].value;
-    }
-
-    if (ayudaScore >= HELP_THRESHOLD && ayudaScore > maxOther) {
-      if (helpHits < 255) helpHits++;
-    } else {
-      helpHits = 0;
-    }
-
-    if (helpHits >= HELP_MIN_HITS) {
-      Serial.println("[ML] HELP DETECTED");
-      triggerLocalAlert();
-      helpHits = 0;
-    }
-  }
-
-  inference.buf_ready = 0;
-  inference.buf_count = 0;
-}
-#else
-bool initML() {
-  Serial.println("[ML] MIC DISABLED");
-  return false;
-}
-
-void taskVoiceML() {}
-#endif
-
-void initIMU() {
-  Wire.begin();
-
-  if (myIMU.begin() == 0) {
-    imuOk = true;
-    Serial.println("IMU init OK");
-  } else {
-    imuOk = false;
-    Serial.println("IMU init FAIL");
-  }
-}
-
-void initBLE() {
-  Bluefruit.begin();
-  Bluefruit.setTxPower(4);
-  Bluefruit.setName(BLE_NAME);
-
-  Bluefruit.Periph.setConnectCallback(connect_callback);
-  Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
-
-  imuService.begin();
-
-  statusChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
-  statusChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  statusChar.setMaxLen(32);
-  statusChar.begin();
-
-  accChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
-  accChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  accChar.setMaxLen(24);
-  accChar.begin();
-
-  gyroChar.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
-  gyroChar.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  gyroChar.setMaxLen(24);
-  gyroChar.begin();
-
-  commandChar.setProperties(CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
-  commandChar.setPermission(SECMODE_OPEN, SECMODE_OPEN);
-  commandChar.setMaxLen(20);
-  commandChar.setWriteCallback(handleBleCommand);
-  commandChar.begin();
-
-  updateBleState();
-
-  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
-  Bluefruit.Advertising.addTxPower();
-  Bluefruit.Advertising.addService(imuService);
-  Bluefruit.ScanResponse.addName();
-  Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(32, 244);
-  Bluefruit.Advertising.setFastTimeout(30);
-  Bluefruit.Advertising.start(0);
-
-  Serial.println("BLE begin OK");
-  Serial.print("Advertising as: ");
-  Serial.println(BLE_NAME);
-}
-
-void initDFPlayer() {
-  Serial1.begin(9600);
-  delay(1500);
-
-  if (dfPlayer.begin(Serial1, true, true)) {
-    dfPlayerOk = true;
-    dfPlayer.volume(30);
-    dfPlayer.outputDevice(DFPLAYER_DEVICE_SD);
-    Serial.println("DFPLAYER OK");
-  } else {
-    dfPlayerOk = false;
-    Serial.println("DFPLAYER FAIL");
   }
 }
 
@@ -576,11 +949,76 @@ void taskBLESend() {
   }
 }
 
+void taskIntroAudio() {
+  if (!introPlaying) return;
+  if (systemMode != MODE_PRE_ALERT) return;
+
+  if (millis() - introStartMs >= INTRO_AUDIO_MS) {
+    introPlaying = false;
+    countdownActive = true;
+    countdownStartMs = millis();
+    lastCountdownSecond = 11;
+    Serial.println("[SYS] Countdown started 10 -> 1");
+  }
+}
+
+void taskCountdown() {
+  if (!countdownActive) return;
+  if (systemMode != MODE_PRE_ALERT) return;
+
+  uint32_t now = millis();
+  uint32_t elapsed = now - countdownStartMs;
+
+  if (elapsed >= COUNTDOWN_MS) {
+    enterConfirmedMode();
+    return;
+  }
+
+  uint32_t remainingMs = COUNTDOWN_MS - elapsed;
+  uint8_t remainingSec = (remainingMs + 999) / 1000;
+
+  if (remainingSec != lastCountdownSecond) {
+    lastCountdownSecond = remainingSec;
+
+    Serial.print("[CNT] ");
+    Serial.print(remainingSec);
+    Serial.println(" s");
+
+    switch (remainingSec) {
+      case 10: playMp3Track(10); break;
+      case 9:  playMp3Track(9);  break;
+      case 8:  playMp3Track(8);  break;
+      case 7:  playMp3Track(7);  break;
+      case 6:  playMp3Track(6);  break;
+      case 5:  playMp3Track(5);  break;
+      case 4:  playMp3Track(4);  break;
+      case 3:  playMp3Track(3);  break;
+      case 2:  playMp3Track(2);  break;
+      case 1:  playMp3Track(TRACK_ONE); break;
+      default: break;
+    }
+  }
+}
+
+void taskCancelCooldown() {
+  if (!cancelCooldownActive) return;
+
+  if (millis() - cancelCooldownStartMs >= CANCEL_COOLDOWN_MS) {
+    cancelCooldownActive = false;
+    enterNormalMode();
+    Serial.println("[SYS] Cancel cooldown ended");
+  }
+}
+
 void taskDebugLog() {
-  if (millis() - lastDebugMsg < 500) return;
+  if (millis() - lastDebugMsg < 3000) return;
   lastDebugMsg = millis();
 
-  Serial.print("[DBG] state=");
+  Serial.print("[DBG] mode=");
+  Serial.print(modeToString(systemMode));
+  Serial.print(" | trigger=");
+  Serial.print(triggerToString(triggerSource));
+  Serial.print(" | crash=");
   Serial.print(stateToString(crashState));
   Serial.print(" | accNow=");
   Serial.print(accMag, 2);
@@ -596,8 +1034,6 @@ void taskDebugLog() {
   Serial.print(deltaGyroMag, 2);
   Serial.print(" | still=");
   Serial.print(isStillNow() ? "true" : "false");
-  Serial.print(" | alert=");
-  Serial.print(localAlertActive ? "true" : "false");
   Serial.print(" | ble=");
   Serial.println(bleConnected ? "true" : "false");
 }
@@ -607,15 +1043,20 @@ void taskSerialCommands() {
 
   char c = Serial.read();
 
-  if (c == '1') triggerLocalAlert();
-  else if (c == '0' || c == 'c' || c == 'C') clearLocalAlert();
-  else if (c == 'p' || c == 'P') playMp3Track(1);
-  else if (c == 'f' || c == 'F') triggerLocalAlert();
+  if (c == '1') startPreAlertByVoice();
+  else if (c == '0') forceNormalMode();
+  else if (c == 'c' || c == 'C') cancelAlert();
+  else if (c == 'p' || c == 'P') playMp3Track(TRACK_INTRO);
+  else if (c == 'f' || c == 'F') startPreAlertByFall();
+  else if (c == 'e' || c == 'E') enterConfirmedMode();
   else if (c == 'd' || c == 'D') playMp3Track(10);
   else if (c == 'n' || c == 'N') playMp3Track(9);
-  else if (c == 'u' || c == 'U') playMp3Track(12);
+  else if (c == 'u' || c == 'U') playMp3Track(TRACK_ONE);
 }
 
+// =====================================================
+// SETUP
+// =====================================================
 void setup() {
   Serial.begin(115200);
 
@@ -623,26 +1064,40 @@ void setup() {
   while (!Serial && (millis() - serialWaitStart < 3000)) {}
 
   pinMode(CANCEL_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_STRIP_PIN, OUTPUT);
+  ledStartupStartMs = millis();
+  ledStartupDone = false;
+  ledStartupBlinkDone = false;
+  ledStartupBlinkStartMs = 0;
+  setLedStrip(false);  // Arranca apagada y hace efecto progresivo en taskLedStrip()
 
-  Serial.println("=== SOS Biker XIAO Boot ===");
+  Serial.println("=== SOS Biker XIAO Boot | AUXILIO + DFPlayer + BLE + IMU ===");
 
   initIMU();
   initBLE();
   initDFPlayer();
   mlReady = initML();
+
+  enterNormalMode();
+  Serial.println("[SYS] System ready");
 }
 
+// =====================================================
+// LOOP
+// =====================================================
 void loop() {
   taskIMURead();
   taskBLESend();
   taskDebugLog();
   taskCancelButton();
+  taskLedStrip();
+  taskIntroAudio();
+  taskCountdown();
+  taskCancelCooldown();
   taskVoiceML();
   taskSerialCommands();
 }
 
-#if ENABLE_VOICE_ML
 #if !defined(EI_CLASSIFIER_SENSOR) || EI_CLASSIFIER_SENSOR != EI_CLASSIFIER_SENSOR_MICROPHONE
 #error "Invalid model for current sensor."
-#endif
 #endif
